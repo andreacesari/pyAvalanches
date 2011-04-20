@@ -57,7 +57,6 @@ class StackImages:
             seqImages = []
             # TODO: add choice of first and last filename
             for k, image in enumerate(imageFileNames[imageFirst:imageLast]):
-                print image
                 im = Image.open(image)
                 if resize_factor:
                     imX, imY = im.size
@@ -334,12 +333,19 @@ class StackImages:
         #out = numpy.asarray(out,dtype='int32')
         self.colorImage= pColor[out].reshape(self.dimX, self.dimY, 3)
         imOut = scipy.misc.toimage(self.colorImage)
-        imOut.show()
+        if os.name == 'posix':
+            try:
+                os.system("display %s&" % imOut)
+            except:
+                print "Please set your display command"
+        else:
+            print "Display of the image not possible"
+
         # Count no switched pixels
         switchPixels = np.sum(isPixelSwitched)
         totNumPixels = self.dimX*self.dimY
         noSwitchPixels = totNumPixels - switchPixels
-        swPrint = (switchPixels, switchPixels/floaf(totNumPixels), noSwitchPixels/totNumPixels, noSwitchPixels)
+        swPrint = (switchPixels, switchPixels/float(totNumPixels)*100., noSwitchPixels, noSwitchPixels/float(totNumPixels)*100.)
         print "There are %d (%.2f %%) switched and %d (%.2f %%) not-switched pixels" % swPrint
         yes_no = raw_input("Do you want to save the image (y/N)?")
         yes_no = yes_no.upper()
@@ -464,10 +470,12 @@ class StackImages:
 #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run22_50x_just_rough/down"
 #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run23_50x_rough_long"
 #mainDir = "/home/gf/meas/Simulation"
-mainDir = "/media/DATA/meas/MO/CoFe 20 nm/10x/good set 2/run7"
+#mainDir = "/media/DATA/meas/MO/CoFe 20 nm/10x/good set 2/run7"
 #mainDir = "/media/DATA/meas/MO/CoFe 20 nm/5x/set1/run1/"
+mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/10x/good set 2/run7/"
 
-firstImage = 20
-lastImage = 1330
+
+firstImage = 361
+lastImage = 1008
 images = StackImages(mainDir,sigma=2.5,resize_factor=False,fileType=None,\
                     imageFirst=firstImage, imageLast=lastImage)
