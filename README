@@ -7,6 +7,7 @@ I suggest to use the -qt4 framework (ipython -q4thread), as the plots give less 
 
 The image files to test the code can be downloaded here:
 
+http://emma.inrim.it/files/testimages.tgz
 
 there are 1500 images; the real first image, with a small avalanche, is at 0663. 
 Clearly this can optimized cutting all the first 662 images (see below), 
@@ -19,7 +20,7 @@ So under ipython this is the sequence of commands:
 >>> mainDir = "\yourDirOfData"
 >>> firstImage = 0 # Or put any number you like, such as 650
 >>> lastImage = None # It takes up to the last image
->>> images = StackImages(mainDir,sigma=2.5,imageFirst=firstImage, imageLast=lastImage)
+>>> images = StackImages(mainDir,sigma=2.5,imageFirst=firstImage, imageLas  t=lastImage)
 
 The the code loads and prepares a 3D numpy array of the type images(imageNumber, dimX, dimY).
 
