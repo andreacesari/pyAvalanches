@@ -1,1 +1,62 @@
 A set of python tools to analyze experimental and simulation data of system showing avalanches, both as a temporal process and in images
+
+How to use it
+----------------------------------
+The code is still at a preliminar stage and must be used with ipython.
+I suggest to use the -qt4 framework (ipython -q4thread), as the plots give less problems than with other threads.
+
+The image files to test the code can be downloaded here:
+
+
+there are 1500 images; the real first image, with a small avalanche, is at 0663. 
+Clearly this can optimized cutting all the first 662 images (see below), 
+but for test purpouses it could be nice to have the whole sequence.
+
+So under ipython this is the sequence of commands:
+
+>>> run visualBarkh.py
+
+>>> mainDir = "\yourDirOfData"
+>>> firstImage = 0 # Or put any number you like, such as 650
+>>> lastImage = None # It takes up to the last image
+>>> images = StackImages(mainDir,sigma=2.5,imageFirst=firstImage, imageLast=lastImage)
+
+The the code loads and prepares a 3D numpy array of the type images(imageNumber, dimX, dimY).
+
+There are a few methods now that can be used:
+
+>>> images.Array, which contains the whole array
+>>> images.shape(), which gives (1499, 500, 500) in this case
+>>> images.imDiffShow(940,939), to see the difference between image 940 and 939
+
+>>> images.pixelTimeSequenceShow((320,211)), giving the gray_scale sequence (1500 pts) of pixel = 320, 211
+
+To calculate the avalanches, and get the color picture similar to the korean plots first run:
+
+>>> images.getColorImage()
+
+Here there is the core of the calculation, and the part to be parallelized (see TODO file).
+
+To really see the color image now run, for instance:
+
+>>> images.showColorImage(4, palette='random')
+
+>>> images.showColorImage?
+    
+    showColorImage([threshold, palette, noSwitchColor, ask])
+    Show the calculated color Image of the avalanches.
+    Run getColorImage if not done before.
+    
+    Parameters
+    ---------------
+    threshold: integer, optional
+        Defines if the pixel switches when gray_level_change >= threshold
+    palette: string, required, default = 'korean'
+        Choose a palette between 'korean', 'randomKorean', and 'random'
+        'randomKorean' is a random permutation of the korean palette
+        'random' is calculated on the fly, so each call of the method gives different colors
+    noSwithColor: string, optional, default = 'black'
+        background color for pixels having gray_level_change below the threshold
+
+
+

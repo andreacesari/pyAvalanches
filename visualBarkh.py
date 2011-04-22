@@ -23,23 +23,22 @@ class StackImages:
     """
         
     def __init__(self,mainDir,filtering="Gauss",sigma=2,resize_factor=None,\
-                 mountDir="/home/gf/meas/",fileType="hdf5",imageFirst=0,imageLast=-1):
+                 mountDir="/home/gf/meas/",fileType=None,imageFirst=0,imageLast=-1):
         self.colorImage = None
         self.colorImageDone = False
         self.threshold = 0
         if imageLast == None:
             imageLast = -1
         # Make a kernel as a step-function
-        self.kernel = np.array([-1]*(5) +[1]*(5)) # Good for Black_to_white change of grey scale
+        self.kernel = np.array([-1]*(5) +[1]*(5)) # Good for Black_to_White change of grey scale
         if not fileType:
-            #
             # Check if ~/meas is mounted or existing
             who = os.getlogin()
-            mountDir = os.path.join("/home", who, "meas")
-            if not os.path.ismount(mountDir) and not os.path.isdir(mainDir):
-                print "Please mount dir ", mountDir
-                sys.exit()
-            #
+            if who == 'gf':
+                mountDir = os.path.join("/home", who, "meas")
+                if not os.path.ismount(mountDir) and not os.path.isdir(mainDir):
+                    print "Please mount dir ", mountDir
+                    sys.exit()
             # Collect the list of images in mainDir
             extSeq = ['tif','jpg','jpeg','ppm']
             for ext in extSeq:
@@ -55,7 +54,6 @@ class StackImages:
             # Load the images
             print "Loading images: "
             seqImages = []
-            # TODO: add choice of first and last filename
             for k, image in enumerate(imageFileNames[imageFirst:imageLast]):
                 im = Image.open(image)
                 if resize_factor:
@@ -67,8 +65,7 @@ class StackImages:
                     imArray = nd.gaussian_filter(imArray,sigma)
                 elif filtering == "FourierGauss":
                     imArray = nd.fourier_gaussian(imArray,sigma)
-                seqImages.append(imArray)
-            
+                seqImages.append(imArray)        
             # Make the sequence of the images as a 3D scipy.array          
             print "Stacking ..."
             self.Array = scipy.array(tuple(seqImages))
@@ -102,29 +99,31 @@ class StackImages:
         plt.draw()
         plt.show()
         
-    def pixelTimeSequence(self,P=(0,0)):
-        "Get the temporal sequence of the gray level of a single pixel P"
-        x,y = P
+    def pixelTimeSequence(self,pixel=(0,0)):
+        "Get the temporal sequence of the gray level of a pixel"
+        x,y = pixel
         return self.Array[:,x,y]
         
     def pixelTimeSequenceShow(self,pixel=(0,0),width='all'):
         """
-        Plot the temporal sequence of the gray level of a single pixel P
-        width = small (half of the step width) | all
+        Plot the temporal sequence of the gray level of a pixel;
+        width indicates the number of points before and after the switch
+        width = small (half of the step width) | all (the point in the sequence)
         """
+        # Plot the temporal sequence first
         pxt = self.pixelTimeSequence(pixel)
         plt.plot(pxt,'-o')
-        # Normalize the kernel function for better comparison
-        switch, (left, rigth) = self.getSwitchTime(pixel, width)
+        # Add the kernel (step) function
+        switch, (value_left, value_rigth) = self.getSwitchTime(pixel, width)
         print "switch = ", switch
+        print "gray level change at switch = ", abs(value_left-value_rigth)
         if width == 'small':
             halfWidth = len(self.kernel)/2
             x = range(switch-halfWidth+1, switch+halfWidth+1)
-            #y = [maxTS*(i+1)/2.+minTS*(1-i)/2. for i in self.kernel]        
             y = np.concatenate((left*abs(self.kernel[:halfWidth]), rigth*abs(self.kernel[halfWidth:])))
         elif width=='all':
             x = range(len(pxt))
-            y = (switch+1)*[left]+(len(pxt)-switch-1)*[rigth]
+            y = (switch+1)*[value_left]+(len(pxt)-switch-1)*[value_rigth]
         plt.plot(x,y)
         plt.draw()
         plt.show()
@@ -157,15 +156,9 @@ class StackImages:
         else:
             print 'Method not implement yet'
             return None
-        out0 = pxTimeSeq[lowPoint:switch+1]
-        setOut0 = np.unique(out0)
-        out1= pxTimeSeq[switch+1:highPoint]
-        setOut1 = np.unique(out1)
-        leftLevel = np.int(np.mean(out0)+0.5)
-        rigthLevel = np.int(np.mean(out1)+0.5)
-        levels = leftLevel, rigthLevel
-        return switch, levels
-
+        leftLevel = np.int(np.mean(pxTimeSeq[lowPoint:switch+1])+0.5)
+        rigthLevel = np.int(np.mean(pxTimeSeq[switch+1:highPoint])+0.5)
+        return switch, (leftLevel, rigthLevel)
 
     def imDiff(self,i,j=0):
         "Properly rescaled difference between images"
@@ -246,17 +239,15 @@ class StackImages:
     
     def getColorImage(self, width='all'):
         """
-        Get a color image of the switch times
-        using the Korean palette (defined in 
-        getColor
+        Calculate the switch times and the gray level changes
+        for each pixel in the image sequence
         """
         self.switchTimes = []
         self.switchSteps = []
         noSwitch = False
-        #self.colorImage = Image.new('RGB',(self.dimX,self.dimY))
-        #draw = ImageDraw.Draw(self.colorImage)
-        # to check for not Squared images if x <-> y
         startTime = time.time()
+        # ####################
+        # TODO: make here a parallel calculus
         for x in range(self.dimX):
             # Print current row
             if not (x+1)%10:
@@ -266,24 +257,27 @@ class StackImages:
                 startTime = time.time()
             for y in range(self.dimY):
                 switch, levels = self.getSwitchTime((x,y), width)
-                step = np.abs(levels[0]- levels[1])
-                #if switch == 0: # TODO: how to deal with steps at zero time
-                #   print x,y
+                grayChange = np.abs(levels[0]- levels[1])
+                if switch == 0: # TODO: how to deal with steps at zero time
+                    print x,y
                 self.switchTimes.append(switch)
-                self.switchSteps.append(step)
+                self.switchSteps.append(grayChange)
+        print "\n"
         # Calculate the colours, considering the range of the switch values obtained 
         self.min_switch = np.min(self.switchTimes)
         self.max_switch = np.max(self.switchTimes)
-        print "\nAvalanches occur between frame %i and %i" % (self.min_switch, self.max_switch)
+        print "Avalanches occur between frame %i and %i" % (self.min_switch, self.max_switch)
         nImagesWithSwitch = self.max_switch - self.min_switch+1
-        print "Gray steps are between %s and %s" % (min(self.switchSteps), max(self.switchSteps))
-        # Prepare Korean  and Random Palette
-        self.koreanPalette = np.array([self.getColors(i-self.min_switch, nImagesWithSwitch) for i in range(self.min_switch,self.max_switch+1)])
-        self.randomPalette = np.random.permutation(self.koreanPalette)
+        print "Gray changes are between %s and %s" % (min(self.switchSteps), max(self.switchSteps))
+        # Prepare the Korean Palette
+        self.koreanPalette = np.array([self.getKoreanColors(i-self.min_switch, nImagesWithSwitch) for i in range(self.min_switch,self.max_switch+1)])
         self.colorImageDone = True
         return
 
-    def getColors(self,switchTime,n_images=None):
+    def getKoreanColors(self,switchTime,n_images=None):
+        """
+        Make a palette in the korean style
+        """
         if not n_images:
             n_images = self.n_images
         n = float(switchTime)/float(n_images)*3.
@@ -291,7 +285,7 @@ class StackImages:
         G = n*(n<=1.)+ (n>1.)*(n<=2.)+(3.-n)*(n>2.)
         B = (n-1.)*(n>=1.)*(n<2.)+(n>=2.)
         R, G, B = [int(i*255) for i in [R,G,B]]
-        return R,G,B    
+        return R,G,B
     
     def checkColorImageDone(self,ask=True):
         print "You must first run the getColorImage script: I'll do that for you"
@@ -305,10 +299,21 @@ class StackImages:
 
     def showColorImage(self,threshold=None, palette='korean',noSwitchColor='black',ask=False):
         """
-        Show the calculated color Image
-        It starts from the array self.switchTimeArray
-        and calculates on real time the color using the required palette,
-        and using a threshold
+        showColorImage([threshold, palette, noSwitchColor, ask])
+        Show the calculated color Image of the avalanches.
+        Run getColorImage if not done before.
+        
+        Parameters
+        ---------------
+        threshold: integer, optional
+            Defines if the pixel switches when gray_level_change >= threshold
+        palette: string, required, default = 'korean'
+            Choose a palette between 'korean', 'randomKorean', and 'random'
+            'randomKorean' is a random permutation of the korean palette
+            'random' is calculated on the fly, so each call of the method gives different colors
+        noSwithColor: string, optional, default = 'black'
+            background color for pixels having gra_level_change below the threshold
+            
         """
         colorPixelsArray = []
         if not threshold:
@@ -317,31 +322,27 @@ class StackImages:
             self.checkColorImageDone(ask=False)
         if palette == 'korean':
             pColor = self.koreanPalette
+        elif palette == 'randomKorean':
+            pColor = np.random.permutation(self.koreanPalette)
         elif palette == 'random':
-            pColor = self.randomPalette
+            pColor = np.random.randint(0,256, self.koreanPalette.shape)
         if noSwitchColor == 'black':
             noSwitchColorValue = [0,0,0]
         elif noSwitchColor == 'white':
             noSwitchColorValue = [255, 255, 255]
         pColor = np.concatenate((pColor, [noSwitchColorValue]))
-        #colorPixelsArray = [pColor[np.isnan(i)*noSwitchColorValue + (~np.isnan(i) and i)] for i in self.switchTimes]
         # Use masked arrays to fill the background color
         isPixelSwitched = scipy.array(self.switchSteps) >= threshold
         maskedSwitchTimes = ma.array(self.switchTimes, mask = ~isPixelSwitched)
+        # Move to the first switch time
         maskedSwitchTimes = maskedSwitchTimes - self.min_switch
-        out = maskedSwitchTimes.filled(-1) # Set the non-switched pixels to use the last value of the pColor array, i.e. noSwitchColorValue
-        #out = numpy.asarray(out,dtype='int32')
+        # Set the non-switched pixels to use the last value of the pColor array, i.e. noSwitchColorValue
+        out = maskedSwitchTimes.filled(-1) # Isn't it fantastic?
+        # Get the color from the palette and reshape to get the image
         self.colorImage= pColor[out].reshape(self.dimX, self.dimY, 3)
         imOut = scipy.misc.toimage(self.colorImage)
-        if os.name == 'posix':
-            try:
-                os.system("display %s&" % imOut)
-            except:
-                print "Please set your display command"
-        else:
-            print "Display of the image not possible"
-
-        # Count no switched pixels
+        imOut.show()
+        # Count the number of the switched pixels
         switchPixels = np.sum(isPixelSwitched)
         totNumPixels = self.dimX*self.dimY
         noSwitchPixels = totNumPixels - switchPixels
@@ -471,11 +472,11 @@ class StackImages:
 #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run23_50x_rough_long"
 #mainDir = "/home/gf/meas/Simulation"
 #mainDir = "/media/DATA/meas/MO/CoFe 20 nm/10x/good set 2/run7"
-#mainDir = "/media/DATA/meas/MO/CoFe 20 nm/5x/set1/run1/"
-mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/10x/good set 2/run7/"
+##mainDir = "/media/DATA/meas/MO/CoFe 20 nm/5x/set1/run1/"
+#mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/10x/good set 2/run8/"
 
 
-firstImage = 361
-lastImage = 1008
-images = StackImages(mainDir,sigma=2.5,resize_factor=False,fileType=None,\
-                    imageFirst=firstImage, imageLast=lastImage)
+#firstImage = 0
+#lastImage = None
+#images = StackImages(mainDir,sigma=2.5,resize_factor=False,fileType=None,\
+                    #imageFirst=firstImage, imageLast=lastImage)

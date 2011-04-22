@@ -1,1 +1,34 @@
-Add CUDA calculation of the switchTimes
+**** Add CUDA calculation of the switchTimes
+
+The code evaluates the point where the gray level changes (switches). 
+
+The getSwitchTime method does this using the minimum of the convolution between
+the gray sequence of the pixel and a step function defined in self.kernel. This is 5 point at -1, and 5 at 1.
+
+line 33; self.kernel = np.array([-1]*(5) +[1]*(5)) # Good for Black_to_White change of grey scale
+
+The getSwitchTime method also returns the gray levels before and after the switch. 
+The difference between these levels is compared to the threshold, to decide if the switch is true or not.
+(Note: thanks to the masked arrays the procedure to calculate the colors is really fast, see showColorImage method).
+
+The bottleneck is between lines 256 and 269:
+
+        for x in range(self.dimX):
+            # Print current row
+            if not (x+1)%10:
+                strOut = 'Analysing row:  %i/%i on %f seconds\r' % (x+1, self.dimX, time.time()-startTime)
+                sys.stdout.write(strOut)
+                sys.stdout.flush()
+                startTime = time.time()
+            for y in range(self.dimY):
+                switch, levels = self.getSwitchTime((x,y), width)
+                grayChange = np.abs(levels[0]- levels[1])
+                if switch == 0: # TODO: how to deal with steps at zero time
+                    print x,y
+                self.switchTimes.append(switch)
+                self.switchSteps.append(grayChange)
+
+This can be clearly done in parallel over the all pixels. 
+Probably the calculation of the SwitchTime (should) could be included in the GPU kernel.
+
+
