@@ -31,6 +31,7 @@ class StackImages:
             imageLast = -1
         # Make a kernel as a step-function
         self.kernel = np.array([-1]*(5) +[1]*(5)) # Good for Black_to_White change of grey scale
+        self.kernel0 = np.array([-1]*(5) +[0] + [1]*(5)) 
         if not fileType:
             # Check if ~/meas is mounted or existing
             who = os.getlogin()
@@ -75,6 +76,7 @@ class StackImages:
             print "grey scale: %i, %i" % (grey_first_image, grey_last_image)
             if grey_first_image > grey_last_image:
                 self.kernel = -self.kernel
+                self.kernel0 = -self.kernel0
         elif fileType=="hdf5":
             self.hdf5 = tables.openFile("/home/gf/meas/Barkh/Film_CoFe.h5",'a')
             self.imagesObj = self.hdf5.root.tk_20nm.mg_20x.run_15.dir_down.im_Gauss25
@@ -104,7 +106,7 @@ class StackImages:
         x,y = pixel
         return self.Array[:,x,y]
         
-    def pixelTimeSequenceShow(self,pixel=(0,0),width='all'):
+    def pixelTimeSequenceShow(self,pixel=(0,0),width='all',useKernel='both'):
         """
         Plot the temporal sequence of the gray level of a pixel;
         width indicates the number of points before and after the switch
@@ -114,36 +116,65 @@ class StackImages:
         pxt = self.pixelTimeSequence(pixel)
         plt.plot(pxt,'-o')
         # Add the kernel (step) function
-        switch, (value_left, value_rigth) = self.getSwitchTime(pixel, width)
-        print "switch = ", switch
-        print "gray level change at switch = ", abs(value_left-value_rigth)
-        if width == 'small':
-            halfWidth = len(self.kernel)/2
-            x = range(switch-halfWidth+1, switch+halfWidth+1)
-            y = np.concatenate((left*abs(self.kernel[:halfWidth]), rigth*abs(self.kernel[halfWidth:])))
-        elif width=='all':
-            x = range(len(pxt))
-            y = (switch+1)*[value_left]+(len(pxt)-switch-1)*[value_rigth]
-        plt.plot(x,y)
+        useKernels = ['step','zero']
+        kernels = [self.kernel, self.kernel0]
+        for k,kernel in enumerate(useKernels):	
+            switch, (value_left, value_rigth) = self.getSwitchTime(pixel,width,useKernel=kernel)
+            print "switch",kernel,"Kernel = ", switch
+            print "gray level change at switch = ", abs(value_left-value_rigth)
+            if width == 'small':
+                halfWidth = len(kernels[k])/2
+                x = range(switch-halfWidth+1, switch+halfWidth+1)
+                y = np.concatenate((left*abs(kernels[k][:halfWidth]), rigth*abs(kernels[k][halfWidth:])))
+            elif width=='all':
+                x = range(len(pxt))
+                y = (switch+1*(k==0))*[value_left]+[(value_left+value_rigth)/2.]*(k==1)+(len(pxt)-switch-1)*[value_rigth]
+            plt.plot(x,y)
         plt.draw()
         plt.show()
         
-    def getSwitchTime(self,pixel=(0,0),width='all',method="convolve1d"):
+    def getSwitchTime(self,pixel=(0,0),width='all',method="convolve1d",useKernel='both'):
         """
         This method searches a step in a function:
         return its position and the lower/upper values (as a tuple)
         * width: how many points are taken to calculate the levels: 
         small: len(self.kernel/2)
         all: all the data from pxTimeSeq
+        Kernel choices:
+        step = [1]*5 +[-1]*5
+        zero = [1]*5 +[0] + [-1]*5
+        both
         """
         startTime = time.time()
         pxTimeSeq = self.pixelTimeSequence(pixel)
         if method == "convolve1d":
-            switch = nd.convolve1d(pxTimeSeq,self.kernel).argmin()
+            if useKernel == 'step' or useKernel == 'both':
+                convolution_of_stepKernel = nd.convolve1d(pxTimeSeq,self.kernel)
+                minStepKernel = convolution_of_stepKernel.min()
+                switchStepKernel = convolution_of_stepKernel.argmin()
+                switch = switchStepKernel
+            if useKernel == 'zero' or useKernel == 'both':
+                convolution_of_zeroKernel = nd.convolve1d(pxTimeSeq,self.kernel0)
+                minZeroKernel = convolution_of_zeroKernel.min()
+                switchZeroKernel = convolution_of_zeroKernel.argmin()
+                switch = switchZeroKernel
+            if useKernel == 'both':
+                if minStepKernel <= minZeroKernel:
+                    switch = switchStepKernel
+                else:
+                    switch = switchZeroKernel
+                    leftLevel = np.int(np.mean(pxTimeSeq[0:switch])+0.5)
+                    rightLevel = np.int(np.mean(pxTimeSeq[switch+1:])+0.5)
+                    middle = (leftLevel+rightLevel)/2
+                    rightLevelStep = np.int(np.mean(pxTimeSeq[switchStepKernel+1:])+0.5)
+                    if abs(pxTimeSeq[switch]-middle)>abs(pxTimeSeq[switch]-rightLevelStep):
+                        switch = switchStepKernel                    
+                    #switch = (switch-1)*(pxTimeSeq[switch]<middle)+switch*(pxTimeSeq[switch]>=middle)
+                #switch = switchStepKernel * (minStepKernel<=minZeroKernel/1.1) + switchZeroKernel * (minStepKernel >minZeroKernel/1.1)
         else:
             raise RuntimeError("Method not yet implemented")            
         # Get points before the switch
-        if width == 'small':
+        if width == 'small': # TODO: fix this in case of both kernels
             halfWidth = len(self.kernel)/2
             lowPoint = switch-halfWidth+1
             if lowPoint <0:
@@ -237,7 +268,7 @@ class StackImages:
         seq = self.Array
         return seq.shape
     
-    def getColorImage(self, width='all'):
+    def getColorImage(self, useKernel='both',width='all'):
         """
         Calculate the switch times and the gray level changes
         for each pixel in the image sequence
@@ -256,7 +287,7 @@ class StackImages:
                 sys.stdout.flush()
                 startTime = time.time()
             for y in range(self.dimY):
-                switch, levels = self.getSwitchTime((x,y), width)
+                switch, levels = self.getSwitchTime((x,y), width, useKernel=useKernel)
                 grayChange = np.abs(levels[0]- levels[1])
                 if switch == 0: # TODO: how to deal with steps at zero time
                     print x,y
@@ -391,8 +422,9 @@ class StackImages:
             self.checkColorImageDone(ask=False)
         # Select the images having swithing pixels
         # and initialize the distributions
-        n_max = self.switchTimesArray.max()+1
-        n_min = self.switchTimesArray.min()
+        self.switchTimesArray = np.array(self.switchTimes).reshape((self.dimX, self.dimY))
+        n_max = max(self.switchTimes)
+        n_min = min(self.switchTimes)
         self.D_avalanches = []
         self.D_cluster = scipy.array([], dtype='int32')
         self.N_cluster = []
@@ -401,7 +433,7 @@ class StackImages:
         #
         # Make a loop to calculate avalanche and clusters for each image
         #
-        for imageNum in range(n_min,n_max): 
+        for imageNum in range(n_min,n_max+1): 
             strOut = 'Analysing image n:  %i\r' % imageNum
             sys.stdout.write(strOut)
             sys.stdout.flush()
@@ -454,8 +486,31 @@ class StackImages:
         return d
 
 
-    
-
+    def getWindowDistributions(self):
+        """
+        classify windowed avs according to switch times, this outputs distribution for each run
+        """
+        switchTimesList = self.switchTimes	
+        avs_list = set(switchTimesList)
+        switchTimesArray = switchTimesList.reshape((500,500)) # reshape array into (x,y) 
+        
+        for n_av in avs_list:
+            single_av = (switchTimesArray==n_avs)*1
+            area = np.sum(single_av)
+            height = max(np.sum(single_av, axis=0))
+            width = max(np.sum(single_av,axis=1))
+            
+            if area in A_s.keys():
+                A_s[area]+=area
+            else:
+                A_s[area] = area
+                
+            
+            
+            # determine how many boundaries each avalanche touches to classify
+            
+            
+        
     # Select dir for analysis: TO IMPROVE
     #mainDir = "/home/gf/meas/Baxrkh/Films/CoFe/20nm/run3_50x/down/"
     #mainDir = "/home/gf/meas/Barkh/Films/FeBSi/50nm/run1/down"
