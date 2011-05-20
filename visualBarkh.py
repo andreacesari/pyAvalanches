@@ -25,6 +25,7 @@ class StackImages:
     def __init__(self,mainDir,filtering="Gauss",sigma=2,resize_factor=None,\
                  mountDir="/home/gf/meas/",fileType=None,imageFirst=0,imageLast=-1):
         self.colorImage = None
+        self.koreanPalette = None
         self.colorImageDone = False
         self.threshold = 0
         if imageLast == None:
@@ -66,10 +67,10 @@ class StackImages:
                     imArray = nd.gaussian_filter(imArray,sigma)
                 elif filtering == "FourierGauss":
                     imArray = nd.fourier_gaussian(imArray,sigma)
-                seqImages.append(imArray)        
+                seqImages.append(imArray)  
             # Make the sequence of the images as a 3D scipy.array          
             print "Stacking ..."
-            self.Array = scipy.array(tuple(seqImages))
+            self.Array = scipy.array(seqImages)
             # Check for the grey direction
             grey_first_image = scipy.mean(self.Array[0].flatten())
             grey_last_image = scipy.mean(self.Array[-1].flatten())
@@ -268,7 +269,7 @@ class StackImages:
         seq = self.Array
         return seq.shape
     
-    def getColorImage(self, useKernel='both',width='all'):
+    def getSwitchTimesAndSteps(self, useKernel='both',width='all'):
         """
         Calculate the switch times and the gray level changes
         for each pixel in the image sequence
@@ -294,14 +295,6 @@ class StackImages:
                 self.switchTimes.append(switch)
                 self.switchSteps.append(grayChange)
         print "\n"
-        # Calculate the colours, considering the range of the switch values obtained 
-        self.min_switch = np.min(self.switchTimes)
-        self.max_switch = np.max(self.switchTimes)
-        print "Avalanches occur between frame %i and %i" % (self.min_switch, self.max_switch)
-        nImagesWithSwitch = self.max_switch - self.min_switch+1
-        print "Gray changes are between %s and %s" % (min(self.switchSteps), max(self.switchSteps))
-        # Prepare the Korean Palette
-        self.koreanPalette = np.array([self.getKoreanColors(i-self.min_switch, nImagesWithSwitch) for i in range(self.min_switch,self.max_switch+1)])
         self.colorImageDone = True
         return
 
@@ -319,20 +312,62 @@ class StackImages:
         return R,G,B
     
     def checkColorImageDone(self,ask=True):
-        print "You must first run the getColorImage script: I'll do that for you"
+        print "You must first run the getSwitchTimesAndSteps script: I'll do that for you"
         if ask:
             yes_no = raw_input("Do you want me to run the script for you (y/N)?")
             yes_no = yes_no.upper()
             if yes_no != "Y":
                 return
-        self.getColorImage()
+        self.getSwitchTimesAndSteps()
         return
 
+    def getColorImage(self,threshold=None, palette='korean',noSwitchColor='black'):
+        """
+        Calculate the color Image using the output of getSwitchTimesAndSteps
+        """
+        if not threshold:
+            threshold = 0
+        if not self.colorImageDone:
+            self.checkColorImageDone(ask=False)
+
+        # Calculate the colours, considering the range of the switch values obtained 
+        if self.koreanPalette is None:
+            self.min_switch = np.min(self.switchTimes)
+            self.max_switch = np.max(self.switchTimes)
+            print "Avalanches occur between frame %i and %i" % (self.min_switch, self.max_switch)
+            nImagesWithSwitch = self.max_switch - self.min_switch+1
+            print "Gray changes are between %s and %s" % (min(self.switchSteps), max(self.switchSteps))
+            # Prepare the Korean Palette
+            self.koreanPalette = np.array([self.getKoreanColors(i-self.min_switch, nImagesWithSwitch) for i in range(self.min_switch,self.max_switch+1)])            
+            
+        if palette == 'korean':
+            pColor = self.koreanPalette
+        elif palette == 'randomKorean':
+            pColor = np.random.permutation(self.koreanPalette)
+        elif palette == 'random':
+            pColor = np.random.randint(0,256, self.koreanPalette.shape)
+        if noSwitchColor == 'black':
+            noSwitchColorValue = [0,0,0]
+        elif noSwitchColor == 'white':
+            noSwitchColorValue = [255, 255, 255]
+        pColor = np.concatenate((pColor, [noSwitchColorValue]))
+        # Use masked arrays to fill the background color
+        self.isPixelSwitched = scipy.array(self.switchSteps) >= threshold
+        maskedSwitchTimes = ma.array(self.switchTimes, mask = ~self.isPixelSwitched)
+        # Move to the first switch time
+        maskedSwitchTimes = maskedSwitchTimes - self.min_switch
+        # Set the non-switched pixels to use the last value of the pColor array, i.e. noSwitchColorValue
+        out = maskedSwitchTimes.filled(-1) # Isn't it fantastic?
+        
+        # Get the color from the palette and reshape to get the image
+        return pColor[out].reshape(self.dimX, self.dimY, 3)
+
+    
     def showColorImage(self,threshold=None, palette='korean',noSwitchColor='black',ask=False):
         """
         showColorImage([threshold, palette, noSwitchColor, ask])
         Show the calculated color Image of the avalanches.
-        Run getColorImage if not done before.
+        Run getSwitchTimesAndSteps if not done before.
         
         Parameters
         ---------------
@@ -346,35 +381,11 @@ class StackImages:
             background color for pixels having gra_level_change below the threshold
             
         """
-        colorPixelsArray = []
-        if not threshold:
-            threshold = 0
-        if not self.colorImageDone:
-            self.checkColorImageDone(ask=False)
-        if palette == 'korean':
-            pColor = self.koreanPalette
-        elif palette == 'randomKorean':
-            pColor = np.random.permutation(self.koreanPalette)
-        elif palette == 'random':
-            pColor = np.random.randint(0,256, self.koreanPalette.shape)
-        if noSwitchColor == 'black':
-            noSwitchColorValue = [0,0,0]
-        elif noSwitchColor == 'white':
-            noSwitchColorValue = [255, 255, 255]
-        pColor = np.concatenate((pColor, [noSwitchColorValue]))
-        # Use masked arrays to fill the background color
-        isPixelSwitched = scipy.array(self.switchSteps) >= threshold
-        maskedSwitchTimes = ma.array(self.switchTimes, mask = ~isPixelSwitched)
-        # Move to the first switch time
-        maskedSwitchTimes = maskedSwitchTimes - self.min_switch
-        # Set the non-switched pixels to use the last value of the pColor array, i.e. noSwitchColorValue
-        out = maskedSwitchTimes.filled(-1) # Isn't it fantastic?
-        # Get the color from the palette and reshape to get the image
-        self.colorImage= pColor[out].reshape(self.dimX, self.dimY, 3)
+        self.colorImage = self.getColorImage(threshold, palette,noSwitchColor)
         imOut = scipy.misc.toimage(self.colorImage)
         imOut.show()
         # Count the number of the switched pixels
-        switchPixels = np.sum(isPixelSwitched)
+        switchPixels = np.sum(self.isPixelSwitched)
         totNumPixels = self.dimX*self.dimY
         noSwitchPixels = totNumPixels - switchPixels
         swPrint = (switchPixels, switchPixels/float(totNumPixels)*100., noSwitchPixels, noSwitchPixels/float(totNumPixels)*100.)
@@ -388,7 +399,13 @@ class StackImages:
             fileName = os.path.join(mainDir,fileName)
             imOut.save(fileName)
 
-            
+    def saveColorImage(self,fileName,threshold=None, palette='korean',noSwitchColor='black'):
+        """
+        makes color image and saves
+        """
+        self.colorImage = self.getColorImage(threshold, palette,noSwitchColor)
+        imOut = scipy.misc.toimage(self.colorImage)
+        imOut.save(fileName)
             
     def imDiffCalculated(self,imageNum,haveColors=True):
         """
@@ -408,8 +425,42 @@ class StackImages:
             self.imDiffCalcArray = imDC*255
             scipy.misc.toimage(self.imDiffCalcArray).show()
         return None
-
-    def getDistributions(self,NN=4,log_step=0.2,edgeThickness=1):
+    
+    def getImageDirection(self, threshold=None):
+        """
+        """
+        if threshold:
+            isPixelSwitched = scipy.array(self.switchSteps) >= threshold
+            maskedSwitchTimes = ma.array(self.switchTimes, mask = ~isPixelSwitched)
+            # Set the non-switched pixels to use the last value of the pColor array, i.e. noSwitchColorValue
+            switchTimesMasked = maskedSwitchTimes.filled(0)
+        else:
+            switchTimesMasked=self.switchTimesArray
+        
+        # first identify first/last 10 avalanches of whole image
+        avsList = sorted(set(switchTimesMasked))
+        firstAvsList = avsList[1:11]
+        lastAvsList = avsList[-10:]
+        # Prepare the masks
+        m = np.ones((self.dimX,self.dimY))
+        # Top mask
+   
+        switchTimesMasked = switchTimesMasked.reshape((self.dimX,self.dimY))
+        pixelsUnderMasks = []
+        # Top mask and how many pixels are in top that belong to first 10 avalanches
+        mask = np.rot90(np.triu(m))*np.triu(m)
+        top = switchTimesMasked*mask
+        pixelsUnderMasks.append(sum([np.sum(top==elem) for elem in firstAvsList]))
+        # Now we need to rotate the mask
+        for i in range(3):
+            mask = np.rot90(mask)
+            top = switchTimesMasked*mask
+            pixelsUnderMasks.append(sum([np.sum(top==elem) for elem in firstAvsList]))
+        # Top, left, bottom, rigth
+        imageDirections=["Top_to_bottom","Left_to_right", "Bottom_to_top","Right_to_left"]
+        
+        
+    def getDistributions(self,threshold=3,NN=4,log_step=0.2,edgeThickness=1):
         #Define the numer of nearest neighbourg
         if NN==8:
             structure = [[1, 1, 1], [1,1,1], [1,1,1]]
@@ -425,6 +476,7 @@ class StackImages:
         self.switchTimesArray = np.array(self.switchTimes).reshape((self.dimX, self.dimY))
         n_max = max(self.switchTimes)
         n_min = min(self.switchTimes)
+        self.imageDir = self.getImageDirection(threshold)
         self.D_avalanches = []
         self.D_cluster = scipy.array([], dtype='int32')
         self.N_cluster = []
