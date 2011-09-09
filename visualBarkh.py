@@ -7,6 +7,7 @@ import Image, ImageDraw
 import os, sys, glob
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
+from scikits.image.filter import tv_denoise
 import tables
 import time
 import getLogDistributions as gLD
@@ -56,6 +57,7 @@ class StackImages:
             # Load the images
             print "Loading images: "
             seqImages = []
+            n_images = len(imageFileNames[imageFirst:imageLast])
             for k, image in enumerate(imageFileNames[imageFirst:imageLast]):
                 im = Image.open(image)
                 if resize_factor:
@@ -63,14 +65,27 @@ class StackImages:
                     im = im.resize((imX/resize_factor, imY/resize_factor), Image.ANTIALIAS)
                 # Put the image in a scipy.array of 8/16 bits
                 imArray = scipy.array(im,dtype="int16")
-                if filtering == "Gauss":
-                    imArray = nd.gaussian_filter(imArray,sigma)
-                elif filtering == "FourierGauss":
-                    imArray = nd.fourier_gaussian(imArray,sigma)
-                seqImages.append(imArray)  
-            # Make the sequence of the images as a 3D scipy.array          
-            print "Stacking ..."
-            self.Array = scipy.array(seqImages)
+                if filtering:
+                    filtering = filtering.lower()
+                    if filtering == "gauss":
+                        imArray = nd.gaussian_filter(imArray,sigma)
+                    elif filtering == "fouriergauss":
+                        imArray = nd.fourier_gaussian(imArray,sigma)
+                    elif filtering == 'median':
+                        imArray = nd.median_filter(imArray,sigma)
+                    elif filtering == 'tv':
+                        imArray = tv_denoise(imArray, weight=30)
+                    elif filtering != None:
+                        print "Filter not available"
+                #imArray = self.histogramEqualization(imArray)
+                seqImages.append(imArray)
+                strOut = 'Getting image:  %i/%i\r' % (k+1, n_images)
+                sys.stdout.write(strOut)
+                sys.stdout.flush()
+            # Make the sequence of the images as a 3D scipy.array 
+            print
+            print("Stacking ...")
+            self.Array = np.dstack(seqImages)
             # Check for the grey direction
             grey_first_image = scipy.mean(self.Array[0].flatten())
             grey_last_image = scipy.mean(self.Array[-1].flatten())
@@ -95,6 +110,9 @@ class StackImages:
     def __getitem__(self,i):
         "Get the i-th image"
         return self.Array[i]
+    
+    def dtype(self):
+        return self[0].dtype
     
     def imShow(self,i):
         "Show the i-th image with plt"
@@ -243,15 +261,17 @@ class StackImages:
             imOut += gt*((im-r2)/(255.-r2)*(255.-s2)+s2)  
         return imOut
 
-    def histogramEqualization(self,imageNum):
+    def histogramEqualization(self,im):
         """
-        Perform the histogram equalization on the image;
+        Perform the histogram equalization on the image or an array;
         returns an array
         """
-        im = self.Array[imageNum]
+        if not isinstance(im, type(np.array([]))):
+            im = np.array(im)
         histOut = scipy.histogram(im.flat, range(257),normed=True)
         cdf = scipy.cumsum(histOut[0])*255
         return scipy.array(cdf[im], dtype='int16')
+
     
     def histogramEqualizationSequence(self):
         """
