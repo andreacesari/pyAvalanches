@@ -1,6 +1,7 @@
 import scipy
 import scipy.ndimage as nd
 import scipy.stats.stats
+import scikits.image.io as im_io
 import numpy as np
 import numpy.ma as ma
 import Image, ImageDraw
@@ -14,6 +15,13 @@ import getLogDistributions as gLD
 reload(gLD)
 import getAxyLabels as gAL
 reload(gAL)
+
+filters = {'gauss': nd.gaussian_filter, 'fouriergauss': nd.fourier_gaussian, 'median': nd.median_filter, 'tv': tv_denoise}
+
+im_io.use_plugin('qt', 'imshow')
+
+def imread_convert(f):
+    return im_io.imread(f).astype(np.int16)
 
 class StackImages:
     """
@@ -29,6 +37,8 @@ class StackImages:
         self.koreanPalette = None
         self.colorImageDone = False
         self.threshold = 0
+        self.figTimeSeq = None
+        self.figDiffs = None
         if imageLast == None:
             imageLast = -1
         # Make a kernel as a step-function
@@ -49,6 +59,8 @@ class StackImages:
                 imageFileNames = sorted(glob.glob(dirImages))
                 if len(imageFileNames):
                     print "Found %d images to load in %s" % (len(imageFileNames), mainDir)
+                    print "First image: %s" % os.path.split(imageFileNames[imageFirst])[1]
+                    print "Last image: %s" % os.path.split(imageFileNames[imageLast])[1]
                     break
             if not len(imageFileNames):    
                 print "Warning, no images in %s" % mainDir
@@ -56,39 +68,39 @@ class StackImages:
     
             # Load the images
             print "Loading images: "
-            seqImages = []
-            n_images = len(imageFileNames[imageFirst:imageLast])
-            for k, image in enumerate(imageFileNames[imageFirst:imageLast]):
-                im = Image.open(image)
-                if resize_factor:
-                    imX, imY = im.size
-                    im = im.resize((imX/resize_factor, imY/resize_factor), Image.ANTIALIAS)
-                # Put the image in a scipy.array of 8/16 bits
-                imArray = scipy.array(im,dtype="int16")
-                if filtering:
-                    filtering = filtering.lower()
-                    if filtering == "gauss":
-                        imArray = nd.gaussian_filter(imArray,sigma)
-                    elif filtering == "fouriergauss":
-                        imArray = nd.fourier_gaussian(imArray,sigma)
-                    elif filtering == 'median':
-                        imArray = nd.median_filter(imArray,sigma)
-                    elif filtering == 'tv':
-                        imArray = tv_denoise(imArray, weight=30)
-                    elif filtering != None:
-                        print "Filter not available"
-                #imArray = self.histogramEqualization(imArray)
-                seqImages.append(imArray)
-                strOut = 'Getting image:  %i/%i\r' % (k+1, n_images)
-                sys.stdout.write(strOut)
-                sys.stdout.flush()
-            # Make the sequence of the images as a 3D scipy.array 
-            print
-            print("Stacking ...")
-            self.Array = np.dstack(seqImages)
+            load_pattern = imageFileNames[imageFirst:imageLast]
+            imageCollection = im_io.ImageCollection(load_pattern, load_func=imread_convert)
+            if filtering:
+                filtering = filtering.lower()
+                if filtering not in filters:
+                    print "Filter not available"
+                    sys.exit()
+                else:
+                    print "Filter: %s" % filtering
+                    self.Array = np.dstack([np.int16(filters[filtering](im,sigma)) for im in imageCollection])
+            else:
+                self.Array = np.dstack([im for im in imageCollection])
+
+                        #for k, image in enumerate(imageFileNames[imageFirst:imageLast]):
+                #im = Image.open(image)
+                #if resize_factor:
+                    #imX, imY = im.size
+                    #im = im.resize((imX/resize_factor, imY/resize_factor), Image.ANTIALIAS)
+                ## Put the image in a scipy.array of 8/16 bits
+                #imArray = scipy.array(im,dtype="int16")
+                
+                ##imArray = self.histogramEqualization(imArray)
+                #seqImages.append(imArray)
+                #strOut = 'Getting image:  %i/%i\r' % (k+1, n_images)
+                #sys.stdout.write(strOut)
+                #sys.stdout.flush()
+            ## Make the sequence of the images as a 3D scipy.array 
+            #print
+            #print("Stacking ...")
+            #self.Array = scipy.array(seqImages)
             # Check for the grey direction
-            grey_first_image = scipy.mean(self.Array[0].flatten())
-            grey_last_image = scipy.mean(self.Array[-1].flatten())
+            grey_first_image = scipy.mean(self.Array[:,:,0].flatten())
+            grey_last_image = scipy.mean(self.Array[:,:,-1].flatten())
             print "grey scale: %i, %i" % (grey_first_image, grey_last_image)
             if grey_first_image > grey_last_image:
                 self.kernel = -self.kernel
@@ -101,7 +113,7 @@ class StackImages:
                 self.kernel = [-k for k in self.kernel]
             self.imageDir = self.imagesObj._v_attrs.IMAGE_DIRECTION
             #hdf5.close()
-        self.n_images, self.dimX, self.dimY = self.Array.shape
+        self.dimX, self.dimY, self.n_images = self.Array.shape
         print "%i image(s) loaded, of %i x %i pixels" % (self.n_images, self.dimX, self.dimY)
         
     def __get__(self):
@@ -109,96 +121,27 @@ class StackImages:
         
     def __getitem__(self,i):
         "Get the i-th image"
-        return self.Array[i]
-    
-    def dtype(self):
-        return self[0].dtype
-    
+        return self.Array[:,:,i]
+        
     def imShow(self,i):
         "Show the i-th image with plt"
-        plt.imshow(self.Array[i],plt.cm.gray)
-        plt.draw()
-        plt.show()
+        if i > self.n_images or i < 0:
+            print "index out of range (0,%i)" % n_images-1
+            return
+        im_io.imshow(self[i])
         
-    def pixelTimeSequence(self,pixel=(0,0)):
-        "Get the temporal sequence of the gray level of a pixel"
-        x,y = pixel
-        return self.Array[:,x,y]
-        
-    def pixelTimeSequenceShow(self,pixel=(0,0),width='all',useKernel='both'):
+    def getLevels(self, pxTimeSeq, switch, kernel = 'step'):
         """
-        Plot the temporal sequence of the gray level of a pixel;
-        width indicates the number of points before and after the switch
-        width = small (half of the step width) | all (the point in the sequence)
-        """
-        # Plot the temporal sequence first
-        pxt = self.pixelTimeSequence(pixel)
-        plt.plot(pxt,'-o')
-        # Add the kernel (step) function
-        useKernels = ['step','zero']
-        kernels = [self.kernel, self.kernel0]
-        for k,kernel in enumerate(useKernels):	
-            switch, (value_left, value_rigth) = self.getSwitchTime(pixel,width,useKernel=kernel)
-            print "switch",kernel,"Kernel = ", switch
-            print "gray level change at switch = ", abs(value_left-value_rigth)
-            if width == 'small':
-                halfWidth = len(kernels[k])/2
-                x = range(switch-halfWidth+1, switch+halfWidth+1)
-                y = np.concatenate((left*abs(kernels[k][:halfWidth]), rigth*abs(kernels[k][halfWidth:])))
-            elif width=='all':
-                x = range(len(pxt))
-                y = (switch+1*(k==0))*[value_left]+[(value_left+value_rigth)/2.]*(k==1)+(len(pxt)-switch-1)*[value_rigth]
-            plt.plot(x,y)
-        plt.draw()
-        plt.show()
-        
-    def getSwitchTime(self,pixel=(0,0),width='all',method="convolve1d",useKernel='both'):
-        """
-        This method searches a step in a function:
-        return its position and the lower/upper values (as a tuple)
-        * width: how many points are taken to calculate the levels: 
-        small: len(self.kernel/2)
-        all: all the data from pxTimeSeq
-        Kernel choices:
-        step = [1]*5 +[-1]*5
-        zero = [1]*5 +[0] + [-1]*5
-        both
-        """
-        startTime = time.time()
-        pxTimeSeq = self.pixelTimeSequence(pixel)
-        if method == "convolve1d":
-            if useKernel == 'step' or useKernel == 'both':
-                convolution_of_stepKernel = nd.convolve1d(pxTimeSeq,self.kernel)
-                minStepKernel = convolution_of_stepKernel.min()
-                switchStepKernel = convolution_of_stepKernel.argmin()
-                switch = switchStepKernel
-            if useKernel == 'zero' or useKernel == 'both':
-                convolution_of_zeroKernel = nd.convolve1d(pxTimeSeq,self.kernel0)
-                minZeroKernel = convolution_of_zeroKernel.min()
-                switchZeroKernel = convolution_of_zeroKernel.argmin()
-                switch = switchZeroKernel
-            if useKernel == 'both':
-                if minStepKernel <= minZeroKernel:
-                    switch = switchStepKernel
-                else:
-                    switch = switchZeroKernel
-                    leftLevel = np.int(np.mean(pxTimeSeq[0:switch])+0.5)
-                    rightLevel = np.int(np.mean(pxTimeSeq[switch+1:])+0.5)
-                    middle = (leftLevel+rightLevel)/2
-                    rightLevelStep = np.int(np.mean(pxTimeSeq[switchStepKernel+1:])+0.5)
-                    if abs(pxTimeSeq[switch]-middle)>abs(pxTimeSeq[switch]-rightLevelStep):
-                        switch = switchStepKernel                    
-                    #switch = (switch-1)*(pxTimeSeq[switch]<middle)+switch*(pxTimeSeq[switch]>=middle)
-                #switch = switchStepKernel * (minStepKernel<=minZeroKernel/1.1) + switchZeroKernel * (minStepKernel >minZeroKernel/1.1)
-        else:
-            raise RuntimeError("Method not yet implemented")            
+        get Left and Rigth levels for different kernel and n. of points
+        """      
+        width = self.width
         # Get points before the switch
-        if width == 'small': # TODO: fix this in case of both kernels
+        if width == 'small': 
             halfWidth = len(self.kernel)/2
-            lowPoint = switch-halfWidth+1
+            lowPoint = switch-halfWidth - 1*(kernel=='zero')
             if lowPoint <0:
                 lowPoint = 0
-            highPoint = switch+halfWidth+1
+            highPoint = switch+halfWidth
             if highPoint > len(pxTimeSeq):
                 highPoint = len(pxTimeSeq)
         elif width == 'all':
@@ -206,13 +149,106 @@ class StackImages:
         else:
             print 'Method not implement yet'
             return None
-        leftLevel = np.int(np.mean(pxTimeSeq[lowPoint:switch+1])+0.5)
-        rigthLevel = np.int(np.mean(pxTimeSeq[switch+1:highPoint])+0.5)
-        return switch, (leftLevel, rigthLevel)
+        leftLevel = np.int(np.mean(pxTimeSeq[lowPoint:switch - 1*(kernel=='zero')])+0.5)
+        rigthLevel = np.int(np.mean(pxTimeSeq[switch:highPoint])+0.5)
+        return leftLevel, rigthLevel
+    
+    
+    def pixelTimeSequence(self,pixel=(0,0)):
+        "Get the temporal sequence of the gray level of a pixel"
+        x,y = pixel
+        return self.Array[x,y,:]
+        
+    def pixelTimeSequenceShow(self,pixel=(0,0)):
+        """
+        Plot the temporal sequence of the gray levels of a pixel;
+        width indicates the number of points before and after the switch
+        to consider for the calculation of the levels
+        width = small (half of the step width) | all (the point in the sequence)
+        """
+        width = self.width
+        # Plot the temporal sequence first
+        pxt = self.pixelTimeSequence(pixel)
+        if not self.figTimeSeq:
+            self.figTimeSeq = plt.figure()
+        else:
+            self.figTimeSeq
+        plt.plot(pxt,'-o')
+        # Add the kernel (step) function
+        useKernels = ['step','zero']
+        kernels = [self.kernel, self.kernel0]
+        for k,kernel in enumerate(useKernels):	
+            switch, (value_left, value_right) = self.getSwitchTime(pixel,useKernel=kernel)
+            print "switch %s, Kernel = %s" % (kernel, switch)
+            print ("gray level change at switch = %s") % abs(value_left-value_right)
+            if width == 'small':
+                halfWidth = len(kernels[k])/2
+                x = range(switch-halfWidth - 1*(k==1), switch+halfWidth)
+                n_points_left = halfWidth
+                n_points_rigth = halfWidth
+            elif width=='all':
+                x = range(len(pxt))
+                n_points_left = switch - 1*(k==1)
+                n_points_rigth = len(pxt) - switch
+            y = n_points_left*[value_left]+[(value_left+value_right)/2.]*(k==1)+n_points_rigth*[value_right]
+            plt.plot(x,y)
+        plt.draw()
+        plt.show()
+        
+    def getSwitchTime(self,pixel=(0,0),useKernel='step',method="convolve1d"):
+        """
+        This method searches the position of a step in a sequence:
+        return its position and the lower/upper values (as a tuple)
+        * width: how many points are taken to calculate the levels: 
+        small: len(self.kernel/2)
+        all: all the data from pxTimeSeq
+        Kernel choices:
+        step = [1]*5 +[-1]*5
+        zero = [1]*5 +[0] + [-1]*5
+        both = step & zero
+        Warning:
+        We define the position of the switch as the first point AFTER the step (with or w/o the zero)
+        This is compatible with the images
+        i.e.  switch = convolution_of_Kernel.argmin() + 1
+        """
+        startTime = time.time()
+        pxTimeSeq = self.pixelTimeSequence(pixel)
+        if method == "convolve1d":
+            if useKernel == 'step' or useKernel == 'both':
+                convolution_of_stepKernel = nd.convolve1d(pxTimeSeq,self.kernel)
+                minStepKernel = convolution_of_stepKernel.min()
+                switchStepKernel = convolution_of_stepKernel.argmin() +1
+                switch = switchStepKernel
+                kernel_to_use = 'step'
+            if useKernel == 'zero' or useKernel == 'both':
+                convolution_of_zeroKernel = nd.convolve1d(pxTimeSeq,self.kernel0)
+                minZeroKernel = convolution_of_zeroKernel.min()
+                switchZeroKernel = convolution_of_zeroKernel.argmin() + 1
+                switch = switchZeroKernel
+                kernel_to_use = 'zero'
+            if useKernel == 'both':
+                if minStepKernel <= minZeroKernel:
+                    switch = switchStepKernel
+                    kernel_to_use = 'step'
+                else:
+                    switch = switchZeroKernel
+                    kernel_to_use = 'zero'
+                    #leftLevel = np.int(np.mean(pxTimeSeq[0:switch])+0.5)
+                    #rightLevel = np.int(np.mean(pxTimeSeq[switch+1:])+0.5)
+                    #middle = (leftLevel+rightLevel)/2
+                    #rightLevelStep = np.int(np.mean(pxTimeSeq[switchStepKernel+1:])+0.5)
+                    #if abs(pxTimeSeq[switch]-middle)>abs(pxTimeSeq[switch]-rightLevelStep):
+                        #switch = switchStepKernel                    
+                    #switch = (switch-1)*(pxTimeSeq[switch]<middle)+switch*(pxTimeSeq[switch]>=middle)
+                #switch = switchStepKernel * (minStepKernel<=minZeroKernel/1.1) + switchZeroKernel * (minStepKernel >minZeroKernel/1.1)
+        else:
+            raise RuntimeError("Method not yet implemented")            
+        levels = self.getLevels(pxTimeSeq, switch, kernel_to_use) 
+        return switch, levels
 
     def imDiff(self,i,j=0):
         "Properly rescaled difference between images"
-        im = self.Array[i]-self.Array[j]
+        im = self[i]-self[j]
         imMin = scipy.amin(im)
         imMax = scipy.amax(im)
         im = scipy.absolute(im-imMin)/float(imMax-imMin)*255
@@ -221,8 +257,7 @@ class StackImages:
     def imDiffShow(self,i,j):
         "Show a properly rescale difference between images"
         plt.imshow(self.imDiff(i,j),plt.cm.gray)
-        plt.show()
-
+        
     def imDiffSave(self,mainDir):
         dirSeq = os.path.join(mainDir,"Seq")
         if not os.path.isdir(dirSeq):
@@ -242,7 +277,7 @@ class StackImages:
         to a single image
         as suggested on DigitalImageProcessing, page. 85
         """
-        im = self.Array[imageNum]
+        im = self[imageNum]
         imOut = 0
         if relative:
             k = 255
@@ -280,16 +315,15 @@ class StackImages:
         """
         seqImages = []
         for i in range(self.n_images):
-            im = self.Array[i]
+            im = self[i]
             imOut = histogramEqualization(im)
             seqImages.append(imOut)
         return scipy.array(tuple(seqImages))
             
     def shape(self):
-        seq = self.Array
-        return seq.shape
+        return self.Array.shape
     
-    def getSwitchTimesAndSteps(self, useKernel='both',width='all'):
+    def getSwitchTimesAndSteps(self):
         """
         Calculate the switch times and the gray level changes
         for each pixel in the image sequence
@@ -308,7 +342,7 @@ class StackImages:
                 sys.stdout.flush()
                 startTime = time.time()
             for y in range(self.dimY):
-                switch, levels = self.getSwitchTime((x,y), width, useKernel=useKernel)
+                switch, levels = self.getSwitchTime((x,y))
                 grayChange = np.abs(levels[0]- levels[1])
                 if switch == 0: # TODO: how to deal with steps at zero time
                     print x,y
@@ -377,10 +411,9 @@ class StackImages:
         # Move to the first switch time
         maskedSwitchTimes = maskedSwitchTimes - self.min_switch
         # Set the non-switched pixels to use the last value of the pColor array, i.e. noSwitchColorValue
-        out = maskedSwitchTimes.filled(-1) # Isn't it fantastic?
-        
+        self.switchTimesArray = maskedSwitchTimes.filled(-1) # Isn't it fantastic?
         # Get the color from the palette and reshape to get the image
-        return pColor[out].reshape(self.dimX, self.dimY, 3)
+        return pColor[self.switchTimesArray].reshape(self.dimX, self.dimY, 3)
 
     
     def showColorImage(self,threshold=None, palette='korean',noSwitchColor='black',ask=False):
@@ -402,8 +435,9 @@ class StackImages:
             
         """
         self.colorImage = self.getColorImage(threshold, palette,noSwitchColor)
-        imOut = scipy.misc.toimage(self.colorImage)
-        imOut.show()
+        #imOut = scipy.misc.toimage(self.colorImage)
+        #imOut.show()
+        plt.imshow(self.colorImage)
         # Count the number of the switched pixels
         switchPixels = np.sum(self.isPixelSwitched)
         totNumPixels = self.dimX*self.dimY
@@ -417,6 +451,7 @@ class StackImages:
             if len(fileName.split("."))==1:
                 fileName = fileName+".png"
             fileName = os.path.join(mainDir,fileName)
+            imOut = scipy.misc.toimage(self.colorImage)
             imOut.save(fileName)
 
     def saveColorImage(self,fileName,threshold=None, palette='korean',noSwitchColor='black'):
@@ -439,7 +474,7 @@ class StackImages:
             imDC = scipy.array(imDC,dtype='int16')
             structure = [[0, 1, 0], [1,1,1], [0,1,0]]
             l, n = nd.label(imDC,structure)
-            plt.imshow(l,plt.cm.prism)
+            im_io.imshow(l,plt.cm.prism)
         else:
             # Normalize to a BW image
             self.imDiffCalcArray = imDC*255
@@ -536,19 +571,34 @@ class StackImages:
         D_x, D_y = gLD.logDistribution(self.D_cluster,log_step=log_step,first_point=1.,normed=True)
         P_x, P_y = gLD.logDistribution(self.D_avalanches,log_step=log_step,first_point=1.,normed=True)
         # Plots of the distributions
-        plt.figure(1)
+        plt.figure()
         plt.loglog(D_x,D_y,'o', label='cluster')
         plt.loglog(P_x,P_y,'v',label='avalanches')
         plt.legend()
         plt.show()
         # Show the N_clusters vs. size_of_avalanche
-        plt.figure(2)
+        plt.figure()
         plt.loglog(self.D_avalanches,self.N_cluster,'o')
         plt.xlabel("Avalanche size")
         plt.ylabel("N. of clusters")
         plt.show()
 
-        
+    def compareImages(self, n):
+        if n in self.switchTimes:
+            out = np.array(self.switchTimes).reshape(self.dimX, self.dimY)
+            fig = plt.figure()
+            fig.set_size_inches(12,6,forward=True)
+            plt.subplot(1,2,1)
+            plt.imshow(self.imDiff(n,n-1),plt.cm.gray)
+            plt.title("Fig. %s, Original" % n)
+            plt.grid(color='blue', ls="-")
+            plt.subplot(1,2,2)
+            plt.imshow(out == n, plt.cm.gray)
+            plt.title("Fig. %s, Calculated" % n)
+            plt.grid(color='blue',ls="-")
+        else:
+            print "No switch there"
+        return
 
         
     def getDictOfColors(self,outPixels):
@@ -582,7 +632,11 @@ class StackImages:
             # determine how many boundaries each avalanche touches to classify
             
             
-        
+            
+
+            
+if __name__ == "__main__":
+    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/50nm/run2/"
     # Select dir for analysis: TO IMPROVE
     #mainDir = "/home/gf/meas/Baxrkh/Films/CoFe/20nm/run3_50x/down/"
     #mainDir = "/home/gf/meas/Barkh/Films/FeBSi/50nm/run1/down"
@@ -600,10 +654,11 @@ class StackImages:
 #mainDir = "/home/gf/meas/Simulation"
 #mainDir = "/media/DATA/meas/MO/CoFe 20 nm/10x/good set 2/run7"
 ##mainDir = "/media/DATA/meas/MO/CoFe 20 nm/5x/set1/run1/"
-#mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/10x/good set 2/run8/"
+    mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/10x/good set 2/run8/"
+    firstImage = 0
+    lastImage = None
+    imArray = StackImages(mainDir,filtering='gauss',sigma=3.,resize_factor=False,fileType=None,\
+                    imageFirst=firstImage, imageLast=lastImage)
 
-
-#firstImage = 0
-#lastImage = None
-#images = StackImages(mainDir,sigma=2.5,resize_factor=False,fileType=None,\
-                    #imageFirst=firstImage, imageLast=lastImage)
+    imArray.width='small'
+    imArray.useKernel = 'step'
