@@ -1,29 +1,39 @@
+import os, sys, glob
+import re
 import scipy
 import scipy.ndimage as nd
 import scipy.signal as signal
 import scipy.stats.stats
-import scikits.image.io as im_io
 import numpy as np
 import numpy.ma as ma
-import Image, ImageDraw
-import os, sys, glob
 import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-from scikits.image.filter import tv_denoise
 import tables
 import time
 import getLogDistributions as gLD
 reload(gLD)
 import getAxyLabels as gAL
 reload(gAL)
+# Load scikits modules if available
+try:
+    from scikits.image.filter import tv_denoise
+    isTv_denoise = True
+except:
+    isTv_denoise = False
+try:
+    import scikits.image.io as im_io
+    im_io.use_plugin('qt', 'imshow')
+    def imread_convert(f):
+        return im_io.imread(f).astype(np.int16)
+    isScikits = True
+except:
+    isScikits = False
+
 
 filters = {'gauss': nd.gaussian_filter, 'fouriergauss': nd.fourier_gaussian, \
-           'median': nd.median_filter, 'tv': tv_denoise, 'wiener': signal.wiener}
+           'median': nd.median_filter, 'wiener': signal.wiener}
 
-im_io.use_plugin('qt', 'imshow')
-
-def imread_convert(f):
-    return im_io.imread(f).astype(np.int16)
+if not isTv_denoise:
+    filters['tv'] = tv_denoise
 
 class StackImages:
     """
@@ -31,99 +41,159 @@ class StackImages:
     as a multi-dimensional scipy 3D array.
     The k-th element of the array (i.e. myArray[k])
     is the k-th image of the sequence.
+    
+    Parameters:
+    ----------------
+    mainDir : string
+        Directory of the image files
+    
+    pattern : string
+        Pattern of the input image files, 
+        as for instance "Data1-*.tif"
+    
+    firstImage, lastImage : int, opt
+       first and last image (included) to be loaded
+       These numbers refer to the numbers of the filenames 
+        
+    resize_factor : int, opt
+       Reducing factor for the size of raw images
+       
+    filtering : string, opt
+        Apply a filter to the raw images between the following:
+        'gauss': nd.gaussian_filter (Default)
+        'fouriergauss': nd.fourier_gaussian, 
+        'median': nd.median_filter, 
+        'tv': tv_denoise, 
+        'wiener': signal.wiener
+        
+    sigma : scalar or sequence of scalars, required with filtering
+       for 'gauss': standard deviation for Gaussian kernel.
+       for 'fouriergauss': The sigma of the Gaussian kernel.
+       for 'median': the size of the filter
+       for 'tv': denoising weight
+       for 'wiener': A scalar or an N-length list giving the size of the Wiener filter
+       window in each dimension.
     """
         
-    def __init__(self,mainDir,filtering="Gauss",sigma=2,resize_factor=None,\
-                 mountDir="/home/gf/meas/",fileType=None,imageFirst=0,imageLast=-1):
+    def __init__(self,mainDir,pattern, resize_factor=None, \
+                 firstImage=1, lastImage=-1,\
+                 filtering=None, sigma=None):
+        # Initialize variables
+        self.mainDir = mainDir
         self.colorImage = None
         self.koreanPalette = None
-        self.colorImageDone = False
+        self.isColorImage = False
         self.threshold = 0
         self.figTimeSeq = None
         self.figDiffs = None
-        if imageLast == None:
-            imageLast = -1
+        if lastImage == None:
+            lastImage = -1
         # Make a kernel as a step-function
         self.kernel = np.array([-1]*(5) +[1]*(5)) # Good for Black_to_White change of grey scale
         self.kernel0 = np.array([-1]*(5) +[0] + [1]*(5)) 
-        if not fileType:
-            # Check if ~/meas is mounted or existing
-            who = os.getlogin()
-            if who == 'gf':
-                mountDir = os.path.join("/home", who, "meas")
-                if not os.path.ismount(mountDir) and not os.path.isdir(mainDir):
-                    print "Please mount dir ", mountDir
-                    sys.exit()
-            # Collect the list of images in mainDir
-            extSeq = ['tif','jpg','jpeg','ppm']
-            for ext in extSeq:
-                dirImages = os.path.join(mainDir,"*."+ext)
-                imageFileNames = sorted(glob.glob(dirImages))
-                if len(imageFileNames):
-                    print "Found %d images to load in %s" % (len(imageFileNames), mainDir)
-                    print "First image: %s" % os.path.split(imageFileNames[imageFirst])[1]
-                    print "Last image: %s" % os.path.split(imageFileNames[imageLast])[1]
-                    break
-            if not len(imageFileNames):    
-                print "Warning, no images in %s" % mainDir
-                sys.exit()
-    
-            # Load the images
-            print "Loading images: "
-            load_pattern = imageFileNames[imageFirst:imageLast]
+        if not os.path.isdir(mainDir):
+            print("Please check you dir %s" % mainDir)
+            print("Path not found")
+            sys.exit()
+        # Collect the list of images in mainDir
+        s = "(%s|%s)" % tuple(pattern.split("*"))
+        patternCompiled = re.compile(s)
+        # Load all the image filenames
+        imageFileNames = glob.glob1(mainDir, pattern)
+        if not len(imageFileNames):
+            print "ERROR, no images in %s" % mainDir
+            sys.exit()
+        else:
+            print "Found %d images in %s" % (len(imageFileNames), mainDir)
+        # Search the number of all the images given the pattern above
+        _imageNumbers = [int(patternCompiled.sub("",fn)) for fn in imageFileNames]
+        # Search the indexes where there are the first and the last images to be loaded
+        if lastImage < 0:
+            lastImage = len(_imageNumbers)  + lastImage + 1
+        try:
+            indexFirst, indexLast = _imageNumbers.index(firstImage), _imageNumbers.index(lastImage)
+        except:
+            i0, i1 = _imageNumbers[0], _imageNumbers[-1]
+            print("Error: range of the images is %s-%s (%s-%s chosen)" % (i0,i1,firstImage, lastImage))
+            sys.exit()
+        # Save the list of numbers of the images to be loaded
+        self.imageNumbers = _imageNumbers[indexFirst:indexLast+1]
+        self.imageIndex = []
+        print "First image: %s" % imageFileNames[indexFirst]
+        print "Last image: %s" % imageFileNames[indexLast]
+        # Load the images
+        print "Loading images: "
+        load_pattern = [os.path.join(mainDir,ifn) for ifn in imageFileNames[indexFirst:indexLast+1]]
+        if isScikits:
             imageCollection = im_io.ImageCollection(load_pattern, load_func=imread_convert)
-            if filtering:
-                filtering = filtering.lower()
-                if filtering not in filters:
-                    print "Filter not available"
-                    sys.exit()
-                else:
-                    print "Filter: %s" % filtering
-                    if filtering == 'wiener':
-                        sigma = [sigma, sigma]
-                    self.Array = np.dstack([np.int16(filters[filtering](im,sigma)) for im in imageCollection])
+        else:
+            pass
+        if filtering:
+            filtering = filtering.lower()
+            if filtering not in filters:
+                print "Filter not available"
+                sys.exit()
             else:
-                self.Array = np.dstack([im for im in imageCollection])
-            # Check for the grey direction
-            grey_first_image = scipy.mean(self.Array[:,:,0].flatten())
-            grey_last_image = scipy.mean(self.Array[:,:,-1].flatten())
-            print "grey scale: %i, %i" % (grey_first_image, grey_last_image)
-            if grey_first_image > grey_last_image:
-                self.kernel = -self.kernel
-                self.kernel0 = -self.kernel0
-        elif fileType=="hdf5":
-            self.hdf5 = tables.openFile("/home/gf/meas/Barkh/Film_CoFe.h5",'a')
-            self.imagesObj = self.hdf5.root.tk_20nm.mg_20x.run_15.dir_down.im_Gauss25
-            self.Array = self.imagesObj.read()
-            if self.imagesObj._v_attrs.GREY_DIRECTION == "White_to_black":
-                self.kernel = [-k for k in self.kernel]
-            self.imageDir = self.imagesObj._v_attrs.IMAGE_DIRECTION
-            #hdf5.close()
-        self.dimX, self.dimY, self.n_images = self.Array.shape
+                print "Filter: %s" % filtering
+                if filtering == 'wiener':
+                    sigma = [sigma, sigma]
+                self.Array = np.dstack([np.int16(filters[filtering](im,sigma)) for im in imageCollection])
+        else:
+            self.Array = np.dstack([im for im in imageCollection])
+        self.shape = self.Array.shape 
+        self.dimX, self.dimY, self.n_images = self.shape
         print "%i image(s) loaded, of %i x %i pixels" % (self.n_images, self.dimX, self.dimY)
-        
+        # Check for the grey direction
+        grey_first_image = scipy.mean(self.Array[:,:,0].flatten())
+        grey_last_image = scipy.mean(self.Array[:,:,-1].flatten())
+        print "grey scale: %i, %i" % (grey_first_image, grey_last_image)
+        if grey_first_image > grey_last_image:
+            self.kernel = -self.kernel
+            self.kernel0 = -self.kernel0
+
     def __get__(self):
         return self.Array
         
-    def __getitem__(self,i):
-        "Get the i-th image"
-        return self.Array[:,:,i]
-        
-    def imShow(self, frame_number):
+    def __getitem__(self,n):
+        """Get the n-th image"""
+        index = self.getImageIndex(n)
+        if index is not None:
+            return self.Array[:,:,index]
+
+    def getImageIndex(self,n):
         """
-        imShow(frame_number)
+        check if image number n has been loaded
+        and return the index of it in the Array
+        """
+        ns = self.imageNumbers
+        try:
+            return ns.index(n)
+        except:
+            print "Image number %i is out of the range (%i,%i)" % (n, ns[0], ns[-1])
+            return None
         
-        Show the i-th image where i = frame_number
+    def imShow(self, imageNumber):
+        """
+        imShow(imageNumber)
+        
+        Show the n-th image where n = image_number
         
         Parameters:
         ---------------
-        frame_number : number, int
-            Number of the frame to be shown.
+        imageNumber : int
+            Number of the image to be shown.
         """
-        if frame_number > self.n_images or frame_number < 0:
-            print "index out of range (0,%i)" % n_images-1
-            return
-        im_io.imshow(self[frame_number])
+        n = self.getImageIndex(imageNumber)
+        if n is not None:
+            im_io.imshow(self[imageNumber])
+        
+    def _getWidth(self):
+        try:
+            width = self.width
+        except:
+            self.width = 'all'
+            print("Warning: the levels are calculated over all the points of the sequence")
+        return self.width
         
     def _getLevels(self, pxTimeSeq, switch, kernel='step'):
         """
@@ -146,11 +216,8 @@ class StackImages:
         levels : tuple
            Left and right levels around the switch position
         """
-        try:
-            width = self.width
-        except:
-            width = 'all'
-            print("Warning: the levels are calculated over all the points of the sequence")
+        width = self._getWidth()
+            
         # Get points before the switch
         if width == 'small': 
             halfWidth = len(self.kernel)/2
@@ -198,11 +265,7 @@ class StackImages:
         newPlot : bool
             Option to open a new frame or use the last one
         """
-        try:
-            width = self.width
-        except:
-            width = 'all'
-            print("Warning: the levels are calculated over all the points of the sequence")
+        width = self._getWidth()
         # Plot the temporal sequence first
         pxt = self.pixelTimeSequence(pixel)
         if not self.figTimeSeq or newPlot==True:
@@ -247,9 +310,8 @@ class StackImages:
             both = step & zero, the one with the highest convolution is chosen
         method : string
             For the moment, only the 1D convolution calculation
-            with scipy.ndimage.convolve1d
+            with scipy.ndimage.convolve1d is available
         """
-        startTime = time.time()
         pxTimeSeq = self.pixelTimeSequence(pixel)
         if method == "convolve1d":
             if useKernel == 'step' or useKernel == 'both':
@@ -284,83 +346,75 @@ class StackImages:
         levels = self._getLevels(pxTimeSeq, switch, kernel_to_use) 
         return switch, levels
 
-    def imDiff(self,i,j=0):
-        "Properly rescaled difference between images"
-        im = self[i]-self[j]
+    def _imDiff(self,imNumbers, invert=False):
+        """Properly rescaled difference between images
+
+        Parameters:
+        ---------------
+        imNumbers : tuple
+        the numbers the images to subtract
+        invert : bool
+        Invert black and white grey levels
+        """
+        i, j = imNumbers
+        try:
+            im = self[i]-self[j]
+        except:
+            return 
+        if invert:
+            im = 255 - im
         imMin = scipy.amin(im)
         imMax = scipy.amax(im)
         im = scipy.absolute(im-imMin)/float(imMax-imMin)*255
         return scipy.array(im,dtype='int16')
 
-    def imDiffShow(self,i,j):
-        "Show a properly rescale difference between images"
-        plt.imshow(self.imDiff(i,j),plt.cm.gray)
+    def imDiffShow(self,imNumbers, invert=False):
+        """Show the outtput of self._imDiff
         
-    def imDiffSave(self,mainDir):
-        dirSeq = os.path.join(mainDir,"Seq")
+        Parameters:
+        ---------------
+        imNumbers : tuple
+        the numbers the images to subtract
+        """
+        try:
+            plt.imshow(self._imDiff(imNumbers, invert),plt.cm.gray)
+        except:
+            return
+        
+    def imDiffSave(self,imNumbers='all', invert=False, mainDir=None):
+        """
+        Save the difference(s) between a series of images
+        
+        Parameters:
+        ---------------
+        imNumbers : tuple or string
+        the numbers of the images to subtract
+        * when 'all' the whole sequence of differences is saved
+        * when a tuple of two number (i.e., (i, j), 
+        all the differences of the images between i and j (included)
+        are saved
+        """
+        if mainDir == None:
+            mainDir = self.mainDir
+        dirSeq = os.path.join(mainDir,"Diff")
         if not os.path.isdir(dirSeq):
             os.mkdir(dirSeq)
-        n = self.n_images
-        for i in range(n-1):
-            im = self.imDiff(i+1,i)
+        if imNumbers == 'all':
+            imRange = self.imageNumbers[:-1]
+        else:
+            im0, imLast = imNumbers
+            imRange = range(im0, imLast)
+            if im0 >= imLast:
+                print "Error: sequence not valid"
+                return
+        for i in imRange:
+            im = self._imDiff((i+1,i))
             imPIL = scipy.misc.toimage(im)
             fileName = "imDiff_%i_%i.tif" % (i+1,i)
+            print fileName
             imageFileName = os.path.join(dirSeq, fileName)
             imPIL.save(imageFileName)
-        
 
-    def contrastStretching(self,imageNum,val_1,val_2,relative=False):
-        """
-        Apply contrast Stretching
-        to a single image
-        as suggested on DigitalImageProcessing, page. 85
-        """
-        im = self[imageNum]
-        imOut = 0
-        if relative:
-            k = 255
-        else:
-            k = 1
-        r1,s1 = int(val_1[0]*k), int(val_1[1]*k)
-        r2,s2 = int(val_2[0]*k), int(val_2[1]*k)
-        lt = scipy.less(im,r1+1)
-        if r1 != 0:
-            imOut += lt*im*s1/r1
-        bw = scipy.greater_equal(im,r1) & scipy.less_equal(im,r2)
-        if r2!=r1:
-            imOut += bw*((im-r1)/float(r2-r1)*(s2-s1)+s1)
-        gt = scipy.greater(im,r2)
-        if r2!= 255:
-            imOut += gt*((im-r2)/(255.-r2)*(255.-s2)+s2)  
-        return imOut
-
-    def histogramEqualization(self,im):
-        """
-        Perform the histogram equalization on the image or an array;
-        returns an array
-        """
-        if not isinstance(im, type(np.array([]))):
-            im = np.array(im)
-        histOut = scipy.histogram(im.flat, range(257),normed=True)
-        cdf = scipy.cumsum(histOut[0])*255
-        return scipy.array(cdf[im], dtype='int16')
-
-    
-    def histogramEqualizationSequence(self):
-        """
-        Perform the histogram equalization on all images
-        of a sequence; returns a 3D array
-        """
-        seqImages = []
-        for i in range(self.n_images):
-            im = self[i]
-            imOut = histogramEqualization(im)
-            seqImages.append(imOut)
-        return scipy.array(tuple(seqImages))
-            
-    def shape(self):
-        return self.Array.shape
-    
     def getSwitchTimesAndSteps(self):
         """
         Calculate the switch times and the gray level changes
@@ -368,7 +422,6 @@ class StackImages:
         """
         self.switchTimes = []
         self.switchSteps = []
-        noSwitch = False
         startTime = time.time()
         # ####################
         # TODO: make here a parallel calculus
@@ -387,7 +440,7 @@ class StackImages:
                 self.switchTimes.append(switch)
                 self.switchSteps.append(grayChange)
         print "\n"
-        self.colorImageDone = True
+        self.isColorImage = True
         return
 
     def getKoreanColors(self,switchTime,n_images=None):
@@ -419,7 +472,7 @@ class StackImages:
         """
         if not threshold:
             threshold = 0
-        if not self.colorImageDone:
+        if not self.isColorImage:
             self.checkColorImageDone(ask=False)
 
         # Calculate the colours, considering the range of the switch values obtained 
@@ -493,7 +546,7 @@ class StackImages:
             'randomKorean' is a random permutation of the korean palette
             'random' is calculated on the fly, so each call of the method gives different colors
         noSwithColor: string, optional, default = 'black'
-            background color for pixels having gra_level_change below the threshold
+            background color for pixels having gray_level_change below the threshold
             
         """
         self.colorImage = self.getColorImage(threshold, palette, noSwitchColor)
@@ -512,7 +565,7 @@ class StackImages:
             fileName = raw_input("Filename (ext=png): ")
             if len(fileName.split("."))==1:
                 fileName = fileName+".png"
-            fileName = os.path.join(mainDir,fileName)
+            fileName = os.path.join(self.mainDir,fileName)
             imOut = scipy.misc.toimage(self.colorImage)
             imOut.save(fileName)
 
@@ -531,7 +584,7 @@ class StackImages:
         Get the difference in BW between two images imageNum and imageNum+1
         as calculated by the self.colorImage
         """
-        if not self.colorImageDone:
+        if not self.isColorImage:
             self.checkColorImageDone(ask=False)
         imDC = (self.switchTimesArray==imageNum)*1
         if haveColors:
@@ -558,7 +611,7 @@ class StackImages:
             Minimum value of the gray level change to conisider
             a pixel as part of an avalanche (i.e. it is switched)
         """
-        if not self.colorImageDone:
+        if not self.isColorImage:
             self.checkColorImageDone(ask=False)
         dims = self.dimX, self.dimY
         _switchTimesArray = self._getSwitchTimesArray(threshold, False, 0)
@@ -571,7 +624,7 @@ class StackImages:
         else:
             first = 0
         firstAvsList = avsList[first:11]
-        lastAvsList = avsList[-10:]
+        #lastAvsList = avsList[-10:]
         # Prepare the mask
         m = np.ones((self.dimX,self.dimY))
         # Top mask
@@ -599,7 +652,7 @@ class StackImages:
             if NN!=4:
                 print "N. of neibourgh not valid: assuming NN=4"
         # Check if analysis of avalanches has been performed
-        if not self.colorImageDone:
+        if not self.isColorImage:
             self.checkColorImageDone(ask=False)
         # Select the images having swithing pixels
         # and initialize the distributions
@@ -692,46 +745,28 @@ class StackImages:
         avs_list = set(switchTimesList)
         switchTimesArray = switchTimesList.reshape((500,500)) # reshape array into (x,y) 
         
-        for n_av in avs_list:
-            single_av = (switchTimesArray==n_avs)*1
-            area = np.sum(single_av)
-            height = max(np.sum(single_av, axis=0))
-            width = max(np.sum(single_av,axis=1))
-            
-            if area in A_s.keys():
-                A_s[area]+=area
-            else:
-                A_s[area] = area
+#        for n_av in avs_list:
+#            single_av = (switchTimesArray==n_avs)*1
+#            area = np.sum(single_av)
+#            height = max(np.sum(single_av, axis=0))
+#            width = max(np.sum(single_av,axis=1))
+#            
+#            if area in A_s.keys():
+#                A_s[area]+=area
+#            else:
+#                A_s[area] = area
                 
             
         # determine how many boundaries each avalanche touches to classify
     
 
 if __name__ == "__main__":
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/50nm/run2/"
-    # Select dir for analysis: TO IMPROVE
-    #mainDir = "/home/gf/meas/Baxrkh/Films/CoFe/20nm/run3_50x/down/"
-    #mainDir = "/home/gf/meas/Barkh/Films/FeBSi/50nm/run1/down"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run1_20x/down"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run9_20x_5ms"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run10_20x_bin1"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run11_20x_bin1_contrast_diff"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run15_20x_save_to_memory/down"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run32"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/good set 2/run5/"
-    #mainDir = "/home/gf/meas/MO/py170/20x/set7"
-    #mainDir = "/home/gf/Misure/Alex/Zigzag/samespot/run2"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run22_50x_just_rough/down"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/run23_50x_rough_long"
-    #mainDir = "/home/gf/meas/Simulation"
-    #mainDir = "/media/DATA/meas/MO/CoFe 20 nm/10x/good set 2/run7"
-    ##mainDir = "/media/DATA/meas/MO/CoFe 20 nm/5x/set1/run1/"
-    #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/10x/good set 2/run8/"
-    mainDir = "/home/gf/meas/Barkh/Films/CoFe/50nm/run2/"
-    firstImage = 0
-    lastImage = None
-    imArray = StackImages(mainDir,filtering='wiener',sigma=1.,resize_factor=False,fileType=None,\
-                    imageFirst=firstImage, imageLast=lastImage)
+    mainDir = "/media/DATA/meas/MO/CoFe/50nm/20x/run5/"
+
+    pattern = "Data1-*.tif"
+    imArray = StackImages(mainDir, pattern, resize_factor=False,\
+                             filtering='gauss', sigma=1.5,\
+                             firstImage=280, lastImage=1029)
 
     imArray.width='small'
     imArray.useKernel = 'step'
