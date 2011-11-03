@@ -3,12 +3,35 @@ import scipy.ndimage as nd
 import time
 import itertools
 
-def getAxyLabels(labels,imageDir="Left_to_right",edgeThickness=1):
+def getAxyLabels(labels, imageDir="Left_to_right", edgeThickness=1, fraction=None):
     """
-    Get the edges touched by clusters 
-    given by a 2D array with labels, obtained using scipy.ndimage.label
+    Get the edges touched by clusters/avalanche
+    given by a 2D array of 1's or 
+    labels, as obtained using scipy.ndimage.label
+    
+    Parameters:
+    ----------------
+    labels : ndarray
+    A 2D array with the cluster numbers
+    as calculated from scipy.ndimage.label
+    
+    imageDir : string
+    The direction of the avalanche motion
+    Left <-> right
+    Bottom <-> top
+
+    edgeThickness : int
+    the width of the frame around the image
+    which is considered as the thickness of each edge
+    
+    fraction : float
+    This is the minimum fraction of the size of the avalanche/cluster inside
+    an edge (of thickness edgeThickness) with sets the avalanche/cluster
+    as touching
     """
     et = edgeThickness
+    if not fraction:
+        fraction = 0.
     # Find first the 4 borders
     # Definition good for "Left_to_right"
     left = list(labels[0:et,:].flatten())
@@ -26,7 +49,7 @@ def getAxyLabels(labels,imageDir="Left_to_right",edgeThickness=1):
     else:
         raise ValueError, "avalanche direction not defined"
     # Find the sets
-    # Select the labels contained in the borders
+    # Select the labels contained in the edges
     #setLrbt = set(left+right+bottom+top)
     setLrbt = set(itertools.chain(*lrbt))
     # Remove the value 0 as it is not a cluster
@@ -36,7 +59,8 @@ def getAxyLabels(labels,imageDir="Left_to_right",edgeThickness=1):
     list_Axy = ['0000']*maxLabel
     # Search for the Axy except for the A00
     for cluster in setLrbt: # iter over clusters touching the edges
-        list_Axy[cluster-1] = "".join([((cluster in edge) and '1' or '0') for edge in lrbt])
+        fraction_size = int(fraction * nd.sum(labels == cluster)) + 1
+        list_Axy[cluster-1] = "".join([((edge.count(cluster) >= fraction_size) and '1' or '0') for edge in lrbt])
         #pixels_on_the_edge = "/".join([str(edge.count(cluster)) for edge in lrbt])
     return scipy.array(list_Axy)
         
@@ -54,14 +78,14 @@ if __name__ == "__main__":
        [1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1],
        [1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0],
        [0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0]], dtype='int16')
-    structure = [[1, 1, 1], [1,1,1], [1,1,1]]
+    structure = [[0, 1, 0], [1,1,1], [0,1,0]]
     #a = a.repeat(100,axis=0)
     #a = a.repeat(66,axis=1)
     labels, n = nd.label(a, structure)
     print labels
     list_sizes = nd.sum(a, labels, range(1,n+1))
     array_sizes = scipy.array(list_sizes,dtype='int16')
-    array_Axy = getAxyLabels(labels,'Bottom_to_top', edgeThickness=1)
+    array_Axy = getAxyLabels(labels,'Bottom_to_top', edgeThickness=1, fraction=0.5)
     for Axy in set(array_Axy):
         sizes = array_sizes[array_Axy==Axy] # Not bad...
         d[Axy] = scipy.concatenate((d.get(Axy,a0),sizes))

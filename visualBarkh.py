@@ -10,6 +10,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from colorsys import hsv_to_rgb
 #import tables
+import Image
 import time
 import getLogDistributions as gLD
 reload(gLD)
@@ -23,8 +24,20 @@ except:
     isTv_denoise = False
 try:
     import scikits.image.io as im_io
-    def imread_convert(f):
-        return im_io.imread(f).astype(np.int16)
+    
+    class Imread_convert():
+        def __init__(self, mode):
+            self.mode = mode
+            
+        def __call__(self, f):
+            if self.mode != "I;16":
+                return im_io.imread(f).astype(np.int16)
+            else:
+                im = Image.open(f)
+                imageList = list(im.getdata())
+                sizeX, sizeY = im.size
+                return np.asanyarray(imageList).reshape(sizeY, sizeX)
+            
     isScikits = True
 except:
     isScikits = False
@@ -146,9 +159,13 @@ class StackImages:
         self.imageIndex = []
         print "First image: %s" % imageFileNames[indexFirst]
         print "Last image: %s" % imageFileNames[indexLast]
+        # Check the mode of the images
+        imageMode = Image.open(os.path.join(mainDir, imageFileNames[indexFirst])).mode
+        imread_convert = Imread_convert(imageMode)
         # Load the images
         print "Loading images: "
         load_pattern = [os.path.join(mainDir,ifn) for ifn in imageFileNames[indexFirst:indexLast+1]]
+        
         if isScikits:
             imageCollection = im_io.ImageCollection(load_pattern, load_func=imread_convert)
         else:
@@ -181,11 +198,11 @@ class StackImages:
         
     def __getitem__(self,n):
         """Get the n-th image"""
-        index = self.getImageIndex(n)
+        index = self._getImageIndex(n)
         if index is not None:
             return self.Array[:,:,index]
 
-    def getImageIndex(self,n):
+    def _getImageIndex(self,n):
         """
         check if image number n has been loaded
         and return the index of it in the Array
@@ -197,9 +214,9 @@ class StackImages:
             print "Image number %i is out of the range (%i,%i)" % (n, ns[0], ns[-1])
             return None
         
-    def imShow(self, imageNumber):
+    def showRawImage(self, imageNumber, plugin='mpl'):
         """
-        imShow(imageNumber)
+        showImage(imageNumber)
         
         Show the n-th image where n = image_number
         
@@ -207,10 +224,17 @@ class StackImages:
         ---------------
         imageNumber : int
             Number of the image to be shown.
+            
+        plugin : str, optional
+        Use a plugin to show an image (default: matplotlib)
         """
-        n = self.getImageIndex(imageNumber)
+        n = self._getImageIndex(imageNumber)
         if n is not None:
-            im_io.imshow(self[imageNumber])
+            im = self[imageNumber]
+            if plugin == 'mpl':
+                plt.imshow(im, plt.cm.gray)
+            else:
+                im_io.imshow(self[imageNumber])
         
     def _getWidth(self):
         try:
@@ -277,7 +301,7 @@ class StackImages:
         x,y = pixel
         return self.Array[x,y,:]
         
-    def pixelTimeSequenceShow(self,pixel=(0,0),newPlot=False):
+    def showPixelTimeSequence(self,pixel=(0,0),newPlot=False):
         """
         pixelTimeSequenceShow(pixel)
         
@@ -376,7 +400,7 @@ class StackImages:
         switch = self.imageNumbers[switch]
         return switch, levels
 
-    def _imDiff(self,imNumbers, invert=False):
+    def _imDiff(self, imNumbers, invert=False):
         """Properly rescaled difference between images
 
         Parameters:
@@ -398,13 +422,16 @@ class StackImages:
         im = scipy.absolute(im-imMin)/float(imMax-imMin)*255
         return scipy.array(im,dtype='int16')
 
-    def imDiffShow(self,imNumbers, invert=False):
-        """Show the outtput of self._imDiff
+    def showTwoImageDifference(self, imNumbers, invert=False):
+        """Show the output of self._imDiff
         
         Parameters:
         ---------------
         imNumbers : tuple
         the numbers of the two images to subtract
+        
+        invert : bool, opt
+        Invert the gray level black <-> white
         """
         if type(invert).__name__ == 'int':
             imNumbers = imNumbers, invert
@@ -504,16 +531,16 @@ class StackImages:
         """
         if not threshold:
             threshold = 0
-        self.isPixelSwitched = scipy.array(self._switchSteps) >= threshold    
+        self.isPixelSwitched = self._switchSteps >= threshold    
         maskedSwitchTimes = ma.array(self._switchTimes, mask = ~self.isPixelSwitched)
         # Move to the first switch time if required
         if isFirstSwitchZero:
             maskedSwitchTimes = maskedSwitchTimes - self.min_switch
         # Set the non-switched pixels to use the last value of the pColor array, i.e. noSwitchColorValue
         switchTimes = maskedSwitchTimes.filled(fillValue) # Isn't it fantastic?
-        return np.asarray(switchTimes)
+        return switchTimes
 
-    def getKoreanColors(self,switchTime,n_images=None):
+    def _getKoreanColors(self, switchTime, n_images=None):
         """
         Make a palette in the korean style
         """
@@ -526,7 +553,7 @@ class StackImages:
         R, G, B = [int(i*255) for i in [R,G,B]]
         return R,G,B
     
-    def checkColorImageDone(self,ask=True):
+    def _isColorImageDone(self,ask=True):
         print "You must first run the getSwitchTimesAndSteps script: I'll do that for you"
         if ask:
             yes_no = raw_input("Do you want me to run the script for you (y/N)?")
@@ -557,7 +584,7 @@ class StackImages:
             threshold = 0
         self._threshold = threshold
         if not self._isSwitchAndStepsDone:
-            self.checkColorImageDone(ask=False)
+            self._isColorImageDone(ask=False)
             
         self.min_switch = np.min(self._switchTimes)
         self.max_switch = np.max(self._switchTimes)
@@ -568,7 +595,7 @@ class StackImages:
         # Calculate the colours, considering the range of the switch values obtained 
         if self._koreanPalette is None:
             # Prepare the Korean Palette
-            self._koreanPalette = np.array([self.getKoreanColors(i-self.min_switch, nImagesWithSwitch) for i in range(self.min_switch,self.max_switch+1)])            
+            self._koreanPalette = np.array([self._getKoreanColors(i, nImagesWithSwitch) for i in range(nImagesWithSwitch)])            
             
         if palette == 'korean':
             pColor = self._koreanPalette
@@ -585,14 +612,14 @@ class StackImages:
             noSwitchColorValue = 3*[0]
         elif noSwitchColor == 'white':
             noSwitchColorValue = 3*[255]
-        self._pColors = np.concatenate((pColor, [noSwitchColorValue]))/255.
-        self._colorMap = mpl.colors.ListedColormap(self._pColors,'pColorMap')
+        self._pColors = np.concatenate(([noSwitchColorValue], pColor))/255.
+        self._colorMap = mpl.colors.ListedColormap(self._pColors, 'pColorMap')
         #Calculate the switch time Array (2D) considering the threshold and the start from zero
         self._switchTimes2D = self._getSwitchTimesArray(threshold, True, -1).reshape(self.dimX, self.dimY)
-        return 
+        return
 
     
-    def showColorImage(self,threshold=None, palette='random', noSwitchColor='black', ask=False):
+    def showColorImage(self, threshold=None, palette='random', noSwitchColor='black', ask=False):
         """
         showColorImage([threshold=None, palette='random', noSwitchColor='black', ask=False])
         
@@ -609,56 +636,64 @@ class StackImages:
             'random' is calculated on the fly, so each call of the method gives different colors
         noSwithColor: string, optional, default = 'black'
             background color for pixels having gray_level_change below the threshold
-            
         """
         # Calculate the Color Image
         self.getColorImage(threshold, palette, noSwitchColor)
         # Prepare to plot
-        self._figColorImage = self._plotColorImage(self._switchTimes2D, self._colorMap, "First attempt", self._figColorImage)
+        self._figColorImage = self._plotColorImage(self._switchTimes2D, self._colorMap, self._figColorImage)
         # Plot the histogram
         self._plotHistogram(self._switchTimes)
         # Count the number of the switched pixels
         switchPixels = np.sum(self.isPixelSwitched)
-        totNumPixels = self.dimX*self.dimY
+        totNumPixels = self.dimX * self.dimY
         noSwitchPixels = totNumPixels - switchPixels
         swPrint = (switchPixels, switchPixels/float(totNumPixels)*100., noSwitchPixels, noSwitchPixels/float(totNumPixels)*100.)
         print "There are %d (%.2f %%) switched and %d (%.2f %%) not-switched pixels" % swPrint
-        yes_no = raw_input("Do you want to save the image (y/N)?")
-        yes_no = yes_no.upper()
-        if yes_no == "Y":
-            fileName = raw_input("Filename (ext=png): ")
-            if len(fileName.split("."))==1:
-                fileName = fileName+".png"
-            fileName = os.path.join(self._mainDir,fileName)
-            imOut = scipy.misc.toimage(self._colorImage)
-            imOut.save(fileName)
+        #yes_no = raw_input("Do you want to save the image (y/N)?")
+        #yes_no = yes_no.upper()
+        #if yes_no == "Y":
+            #fileName = raw_input("Filename (ext=png): ")
+            #if len(fileName.split("."))==1:
+                #fileName = fileName+".png"
+            #fileName = os.path.join(self._mainDir,fileName)
+            #imOut = scipy.misc.toimage(self._colorImage)
+            #imOut.save(fileName)
+    
+    def _call_lambda(self,x,y):
+        x, y = int(y+0.5), int(x+.5)
+        if x >= 0 and x < self.dimX and y >= 0 and y < self.dimY:
+            index = x * self.dimY + y
+            s = "pixel (%i,%i) - switch at: %i, gray step: %i" % \
+                (x, y, self._switchTimes[index], self._switchSteps[index])
+            return s
+        else:
+            return None
             
-    def _plotColorImage(self, data, colorMap, title=None, fig=None):
+    def _plotColorImage(self, data, colorMap, fig=None):
         if fig == None:
             fig = plt.figure()
             fig.set_size_inches(7,6,forward=True)
             ax = fig.add_subplot(1,1,1)
-            ax.format_coord = lambda x,y : "pixel (%i,%i) - switch at: %i" % \
-                (int(y+0.5), int(x+0.5), self._switchTimes2D[int(y+0.5),int(x+.5)]+self.min_switch)        
         else:
             plt.figure(fig.number)
             ax = fig.gca()
-        ax.set_title(title)
+        ax.format_coord = lambda x,y: self._call_lambda(x, y)
+        #ax.set_title(title)
         # Sets the limits of the image
-        extent = 1, self.dimY, self.dimX, 1
-        plt.imshow(data, colorMap, extent = extent)
+        extent = 0, self.dimY - 1, self.dimX - 1, 0
+        plt.imshow(data, colorMap, norm=mpl.colors.NoNorm(), extent = extent)
         return fig
     
     def _plotHistogram(self, data):
         rng = np.arange(self.min_switch-0.5, self.max_switch+0.5)
         if self._figHistogram is None:
             self._figHistogram = plt.figure()
-            ax = self._figHistogram.add_subplot(1,1,1)
+            #ax = self._figHistogram.add_subplot(1,1,1)
         else:
             plt.figure(self._figHistogram.number)
-            ax = plt.gca()
             plt.clf()
         N, bins, patches = plt.hist(data, rng)
+        ax = plt.gca()
         ax.format_coord =  lambda x,y : "image Number: %i, avalanche size (pixels): %i" % (int(x+0.5), int(y+0.5))
         plt.xlabel("image number")
         plt.ylabel("Avalanche size (pixels)")
@@ -675,14 +710,33 @@ class StackImages:
         self._colorImage = self.getColorImage(threshold, palette,noSwitchColor)
         imOut = scipy.misc.toimage(self._colorImage)
         imOut.save(fileName)
-            
+        
+    def saveImage(self, figureNumber):
+        """
+        generic method to save an image or a plot in the figure(figureNumber)
+        """
+        filename = raw_input("file name (.png for images)? ")
+        fig = plt.figure(figureNumber)
+        ax = fig.gca()
+        if len(ax.get_images()):
+            im = ax.get_images()[-1]
+            name, ext = os.path.splitext(filename)
+            if ext != ".png":
+                filename = name +".png"
+            filename = os.path.join(self._mainDir, filename)
+            im.write_png(filename)
+        else:
+            filename = os.path.join(self._mainDir, filename)
+            fig.save(filename)
+        
+                
     def imDiffCalculated(self,imageNum,haveColors=True):
         """
         Get the difference in BW between two images imageNum and imageNum+1
         as calculated by the self._colorImage
         """
         if not self._isColorImage:
-            self.checkColorImageDone(ask=False)
+            self._isColorImageDone(ask=False)
         imDC = (self._switchTimes2D==imageNum)*1
         if haveColors:
             imDC = scipy.array(imDC,dtype='int16')
@@ -807,7 +861,7 @@ class StackImages:
                 # Update the array with threshold and zero time at the beginning
                 self._switchTimes2D[whereChange.reshape(self.dimX, self.dimY)] = ghi + 1 - self.min_switch
         # Add the image without ghosts to the original one
-        self._figColorImage2 = self._plotColorImage(self._switchTimes2D, self._colorMap, title='ghost resolved', fig=self._figColorImage2)
+        self._figColorImage = self._plotColorImage(self._switchTimes2D, self._colorMap, fig=self._figColorImage)
         self._plotHistogram(self._switchTimes)
         
     def manualGhostbuster(self):
@@ -844,7 +898,7 @@ class StackImages:
         imageDirections=["Top_to_bottom","Left_to_right", "Bottom_to_top","Right_to_left"]
         # Check if color Image is available
         if not self._isColorImage:
-            self.checkColorImageDone(ask=False)        
+            self._isColorImageDone(ask=False)        
         switchTimesMasked = self._switchTimes2D
         pixelsUnderMasks = []
         # first identify first 10 avalanches of whole image
@@ -864,14 +918,36 @@ class StackImages:
         return imageDirections[max_in_mask]
     
     
-    def getDistributions(self, threshold=3, NN=4, log_step=0.2, edgeThickness=1):
+    def getDistributions(self, NN=8, log_step=0.2, edgeThickness=1, fraction=0.01):
+        """
+        Calculates the distribution of avalanches and clusters
+        
+        Parameters:
+        ---------------
+        NN : int
+        No of Nearest Neighbours around a pixel to consider two clusters
+        as touching or not
+        
+        log_step: float
+        The step in log scale between points in the log-log distribution.
+        For instance, 0.2 means 5 points/decade
+        
+        edgeThickness : int
+        No of pixels for each edge to consider as the frame of the image 
+        
+        fraction : float
+        This is the minimum fraction of the size of the avalanche/cluster inside
+        an edge (of thickness edgeThickness) with sets the avalanche/cluster
+        as touching
+        """
         # Check if analysis of avalanches has been performed
         if not self._isColorImage:
-            self.checkColorImageDone(ask=False)
+            self._isColorImageDone(ask=False)
         # Initialize variables
         self.D_avalanches = []
         self.D_cluster = scipy.array([], dtype='int32')
-        self.N_cluster = {}
+        #self.N_cluster = {}
+        self.N_cluster = []
         self.dictAxy = {}
         self.dictAxy['aval'] = {}
         self.dictAxy['clus'] = {}
@@ -884,7 +960,7 @@ class StackImages:
             if NN!=4:
                 print "N. of neibourgh not valid: assuming NN=4"
         # Find the direction of the avalanches (left <-> right, top <-> bottom)
-        self.imageDir = self._getImageDirection(threshold)
+        self.imageDir = self._getImageDirection(self._threshold)
         print self.imageDir
         #
         # Make a loop to calculate avalanche and clusters for each image
@@ -914,7 +990,8 @@ class StackImages:
             list_clusters_sizes = nd.sum(im0, array_labels, range(1, n_labels+1))
             # Update the distributions
             self.D_cluster = scipy.concatenate((self.D_cluster, list_clusters_sizes))
-            self.N_cluster[avalanche_size] = scipy.concatenate((self.N_cluster.get(avalanche_size, a0), [n_labels]))
+            #self.N_cluster[avalanche_size] = scipy.concatenate((self.N_cluster.get(avalanche_size, a0), [n_labels]))
+            self.N_cluster.append(n_labels)
             # Now find the Axy distributions (A00, A10, etc)
             # First make an array of the edges each cluster touches
             array_Axy = gal.getAxyLabels(array_labels, self.imageDir, edgeThickness)
@@ -925,6 +1002,7 @@ class StackImages:
             for Axy in np.unique(array_Axy):
                 sizes = array_cluster_sizes[array_Axy==Axy] # Not bad...
                 self.dictAxy['clus'][Axy] = scipy.concatenate((self.dictAxy['clus'].get(Axy,a0), sizes))
+        print()
         print("Done")
         # Calculate and plot the distributions of clusters and avalanches
         D_x, D_y = gLD.logDistribution(self.D_cluster, log_step=log_step, first_point=1., normed=True)
@@ -937,21 +1015,21 @@ class StackImages:
         plt.show()
         # Show the N_clusters vs. size_of_avalanche
         plt.figure()
-        cluster_keys = sorted(self.N_cluster.keys())
-        nClusters = [np.mean(self.N_cluster[n]) for n in cluster_keys]
-        plt.loglog(cluster_keys, nClusters,'o')
+        clusterArray = np.array(zip(self.D_avalanches, self.N_cluster))
+        sizeCluster, nClusters = gLD.averageLogDistribution(clusterArray, log_step=log_step, first_point=1.)
+        plt.loglog(sizeCluster, nClusters,'o')
         plt.xlabel("Avalanche size")
         plt.ylabel("N. of clusters")
         plt.show()
     
 
 if __name__ == "__main__":
-    mainDir = "/media/DATA/meas/MO/CoFe/50nm/20x/run5/"
-
-    pattern = "Data1-*.tif"
+    #mainDir, pattern, firstImage, lastImage = "/media/DATA/meas/MO/CoFe/50nm/20x/run5/", "Data1-*.tif", 280, 1029
+    mainDir, pattern, firstImage, lastImage  = "/media/DATA/meas/MO/Picostar/orig", "B*.TIF", 0, 99
+    
     imArray = StackImages(mainDir, pattern, resize_factor=False,\
                              filtering='gauss', sigma=1.5,\
-                             firstImage=280, lastImage=1029)
+                             firstImage=firstImage, lastImage=lastImage)
 
     imArray.width='small'
     imArray.useKernel = 'step'

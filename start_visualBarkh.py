@@ -4,7 +4,7 @@ Created on Thu Oct  6 17:06:23 2011
 
 @author: gf
 """
-
+import os
 import visualBarkh as vB
 reload(vB)
 
@@ -29,9 +29,17 @@ if __name__ == "__main__":
     ##mainDir = "/media/DATA/meas/MO/CoFe 20 nm/5x/set1/run1/"
     #mainDir = "/home/gf/meas/Barkh/Films/CoFe/20nm/10x/good set 2/run8/"
     #mainDir = "/home/gf/meas/Barkh/Films/CoFe/50nm/run2/"
-    #mainDir, firstImage, lastImage, filtering, sigma, pattern= ("/media/DATA/meas/MO/CoFe/50nm/20x/run5/", 250, 1050, 'gauss', 1.5, "Data1-*.tif")
-    #mainDir, firstImage, lastImage, filtering, sigma, pattern= ("/media/DATA/meas/MO/CoFe/50nm/20x/run6/", 470, 1431, 'gauss', 1.5, "Data1-*.tif")
-    mainDir, firstImage, lastImage, filtering, sigma, pattern= ("/media/DATA/meas/MO/CoFe/50nm/20x/run7/", 120, 1180, 'gauss', 1.5, "Data1-*.tif")
+    rootDir = "/media/DATA/meas/MO/CoFe/50nm/"
+    magnification = "20x"
+    runNo, firstImage, lastImage = "run5", 250, 1050
+    #runNo, firstImage, lastImage = "run6", 470, 1431
+    #runNo, firstImage, lastImage = "run7", 120, 1180
+    #runNo, firstImage, lastImage = "run9", 1, 1380
+    mainDir = os.path.join(rootDir, magnification, runNo)
+    filtering = 'gauss'
+    sigma = 1.5
+    pattern = "Data1-*.tif"
+
     
     imArray = vB.StackImages(mainDir,pattern, filtering=filtering, sigma=sigma,\
                              firstImage=firstImage, lastImage=lastImage)
