@@ -37,7 +37,7 @@ try:
                 imageList = list(im.getdata())
                 sizeX, sizeY = im.size
                 return np.asanyarray(imageList).reshape(sizeY, sizeX)
-            
+
     isScikits = True
 except:
     isScikits = False
@@ -45,16 +45,13 @@ except:
 if isScikits:
     plugins = im_io.plugins()
     keys = plugins.keys()
-    mySeq = ['gtk', 'pil', 'matplotlib', 'qt']
-    for plugin in mySeq:
-        if plugin in keys:
-            use = plugin
+    #mySeq = ['test','pil', 'matplotlib', 'qt']
+    #mySeq = [pl for pl in plugins.keys() if pl in mySeq]
     try:
-        im_io.use_plugin(use, 'imshow')
-        print("Use plugin: %s" % use)
+        im_io.use_plugin('pil', 'imread')
     except:
-        print("No plugin available between %s" % str(mySeq))
-        
+        print "Error in plugin"
+        sys.exit()
 
 filters = {'gauss': nd.gaussian_filter, 'fouriergauss': nd.fourier_gaussian, \
            'median': nd.median_filter, 'wiener': signal.wiener}
@@ -184,7 +181,7 @@ class StackImages:
             self.Array = np.dstack([im for im in imageCollection])
         self.shape = self.Array.shape 
         self.dimX, self.dimY, self.n_images = self.shape
-        print "%i image(s) loaded, of %i x %i pixels" % (self.n_images, self.dimX, self.dimY)
+        print "%i image(s) loaded, of %i ximport skimage.io as io %i pixels" % (self.n_images, self.dimX, self.dimY)
         # Check for the grey direction
         grey_first_image = scipy.mean(self.Array[:,:,0].flatten())
         grey_last_image = scipy.mean(self.Array[:,:,-1].flatten())
@@ -1024,8 +1021,8 @@ class StackImages:
     
 
 if __name__ == "__main__":
-    #mainDir, pattern, firstImage, lastImage = "/media/DATA/meas/MO/CoFe/50nm/20x/run5/", "Data1-*.tif", 280, 1029
-    mainDir, pattern, firstImage, lastImage  = "/media/DATA/meas/MO/Picostar/orig", "B*.TIF", 0, 99
+    mainDir, pattern, firstImage, lastImage = "/media/DATA/meas/Barkh/Films/CoFe/50nm/20x/run7/", "Data1-*.tif", 280, 1029
+    #mainDir, pattern, firstImage, lastImage  = "/media/DATA/meas/MO/Picostar/orig", "B*.TIF", 0, 99
     
     imArray = StackImages(mainDir, pattern, resize_factor=False,\
                              filtering='gauss', sigma=1.5,\
