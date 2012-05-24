@@ -18,12 +18,12 @@ import getAxyLabels as gal
 reload(gal)
 # Load scikits modules if available
 try:
-    from scikits.image.filter import tv_denoise
+    from skimage.filter import tv_denoise
     isTv_denoise = True
 except:
     isTv_denoise = False
 try:
-    import scikits.image.io as im_io
+    import skimage.io as im_io
     
     class Imread_convert():
         def __init__(self, mode):
@@ -54,7 +54,8 @@ if isScikits:
         print("Use plugin: %s" % use)
     except:
         print("No plugin available between %s" % str(mySeq))
-        
+else:
+    print "Scikits.image not available"
 
 filters = {'gauss': nd.gaussian_filter, 'fouriergauss': nd.fourier_gaussian, \
            'median': nd.median_filter, 'wiener': signal.wiener}
@@ -1024,8 +1025,9 @@ class StackImages:
     
 
 if __name__ == "__main__":
-    #mainDir, pattern, firstImage, lastImage = "/media/DATA/meas/MO/CoFe/50nm/20x/run5/", "Data1-*.tif", 280, 1029
-    mainDir, pattern, firstImage, lastImage  = "/media/DATA/meas/MO/Picostar/orig", "B*.TIF", 0, 99
+    mainDir, pattern, firstImage, lastImage = "/media/DATA/meas/MO/CoFe/50nm/20x/run5/", "Data1-*.tif", 280, 1029
+    mainDir, pattern, firstImage, lastImage = "/media/DATA/meas/Barkh/Films/CoFe/50nm/20x/run5/", "Data1-*.tif", 280, 1029    
+    #mainDir, pattern, firstImage, lastImage  = "/media/DATA/meas/MO/Picostar/orig", "B*.TIF", 0, 99
     
     imArray = StackImages(mainDir, pattern, resize_factor=False,\
                              filtering='gauss', sigma=1.5,\
