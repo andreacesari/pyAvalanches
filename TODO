@@ -1,4 +1,5 @@
 **** Add CUDA calculation of the switchTimes
+This is something for Andrea Cesari
 
 The code evaluates the point where the gray level changes (switches). 
 

@@ -37,6 +37,11 @@ if __name__ == "__main__":
     #runNo, firstImage, lastImage = "run6", 470, 1431
     runNo, firstImage, lastImage = "run7", 120, 1180
     #runNo, firstImage, lastImage = "run9", 1, 1380
+    magnification = "10x"
+    runNo, firstImage, lastImage = "run2", 1, 867
+    #magnification = "5x"
+    #runNo, firstImage, lastImage = "run1", 575, 1060
+    
     mainDir = os.path.join(rootDir, magnification, runNo)
     filtering = 'gauss'
     sigma = 1.5
